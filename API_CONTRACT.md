@@ -73,6 +73,13 @@ GET /api/live-updates
 **Purpose**: Get live announcements and updates  
 **Response**: Array of `LiveUpdate` objects
 
+#### 6. Document Summary
+```http
+GET /api/document-summary
+```
+**Purpose**: Get summary and overview of the document being discussed  
+**Response**: Single `DocumentSummary` object
+
 ---
 
 ## 📊 Data Models & Interfaces
@@ -159,6 +166,35 @@ interface LiveUpdate {
 - `timestamp` for chronological ordering
 - Keep recent updates (last 5-10 items)
 
+### DocumentSummary
+```typescript
+interface DocumentSummary {
+  title: string;                     // Document/presentation title
+  abstract: string;                  // Document overview/abstract
+  key_points: string[];              // Array of main points
+  main_topics: string[];             // Array of covered topics
+  difficulty_level: "beginner" | "intermediate" | "advanced";  // Content difficulty
+  estimated_read_time: string;       // Reading time estimate (e.g., "45 minutes")
+  document_type: "research_paper" | "tutorial" | "book_chapter" | "article";  // Document category
+  authors: string[];                 // Array of author names
+  publication_date: string;          // Publication date (YYYY-MM-DD format)
+}
+```
+
+**Frontend Usage**:
+- Displays comprehensive document overview
+- Shows expandable sections for key points and topics
+- Color-codes `difficulty_level` (green=beginner, yellow=intermediate, red=advanced)
+- Shows metadata (authors, publication date, reading time)
+- Uses appropriate icons based on `document_type`
+
+**Backend Requirements**:
+- `difficulty_level` must be one of: "beginner", "intermediate", "advanced"
+- `document_type` must be one of: "research_paper", "tutorial", "book_chapter", "article"
+- `publication_date` in YYYY-MM-DD format
+- `key_points` and `main_topics` should be concise and informative
+- All fields are required for proper display
+
 ---
 
 ## 🔄 API Response Formats
@@ -232,7 +268,7 @@ interface LiveUpdate {
 ## 🔧 Development & Testing
 
 ### Backend Development Checklist
-- [ ] Implement all 5 required endpoints
+- [ ] Implement all 6 required endpoints
 - [ ] Return data in exact TypeScript interface format
 - [ ] Enable CORS for frontend domain
 - [ ] Validate input data on POST requests
