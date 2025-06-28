@@ -54,4 +54,5 @@ export interface UploadResult {
   generatedSlides: number;
   detectedLanguage: string;
   complexity: string;
+  extractedText: string; // Full text content from Python backend
 } 

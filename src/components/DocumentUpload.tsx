@@ -2,6 +2,7 @@
 
 import React, { useState, useRef } from 'react';
 import { UploadResult } from '@/types/api';
+import { ApiClient } from '@/lib/api';
 
 interface DocumentUploadProps {
   onUploadComplete?: (result: UploadResult) => void;
@@ -57,9 +58,6 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
     setUploadResult(null);
 
     try {
-      const formData = new FormData();
-      formData.append('file', file);
-
       // Simulate upload progress
       const progressInterval = setInterval(() => {
         setUploadProgress(prev => {
@@ -71,30 +69,24 @@ export default function DocumentUpload({ onUploadComplete }: DocumentUploadProps
         });
       }, 200);
 
-      const response = await fetch('/api/upload', {
-        method: 'POST',
-        body: formData,
-      });
+      // Call Python backend for PDF processing
+      const result = await ApiClient.uploadPDF(file);
 
       clearInterval(progressInterval);
       setUploadProgress(100);
 
-      if (!response.ok) {
-        throw new Error('Upload failed');
-      }
-
-      const result = await response.json();
       setUploadResult(result);
       onUploadComplete?.(result);
       
-      // Reset after 3 seconds
+      // Reset after 5 seconds to show results longer
       setTimeout(() => {
         setUploadProgress(0);
         setUploadResult(null);
-      }, 3000);
+      }, 5000);
 
     } catch (err) {
-      setError('Upload failed. Please try again.');
+      const errorMessage = err instanceof Error ? err.message : 'Upload failed. Please try again.';
+      setError(errorMessage);
       setUploadProgress(0);
     } finally {
       setIsUploading(false);

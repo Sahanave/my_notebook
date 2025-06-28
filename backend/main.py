@@ -1,8 +1,12 @@
-from fastapi import FastAPI
+from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 from typing import List
 import uvicorn
+import PyPDF2
+import io
+import time
+from datetime import datetime
 
 app = FastAPI(title="Are You Taking Notes API", version="1.0.0")
 
@@ -49,6 +53,22 @@ class DocumentSummary(BaseModel):
     document_type: str  # "research_paper", "tutorial", "book_chapter", "article"
     authors: List[str]
     publication_date: str
+
+class UploadResult(BaseModel):
+    success: bool
+    message: str
+    filename: str
+    fileSize: str
+    pages: int
+    readingTime: str
+    topics: int
+    processingTime: str
+    keyTopics: List[str]
+    extractedSections: List[dict]
+    generatedSlides: int
+    detectedLanguage: str
+    complexity: str
+    extractedText: str  # Full text content
 
 # Sample data (placeholder content)
 sample_slides = [
@@ -207,6 +227,133 @@ async def get_live_updates():
 async def get_document_summary():
     """Get summary of the document being discussed"""
     return sample_document_summary
+
+# PDF Processing Functions
+def extract_text_from_pdf(file_contents: bytes) -> tuple[str, int]:
+    """Extract text from PDF and return text + page count"""
+    try:
+        pdf_reader = PyPDF2.PdfReader(io.BytesIO(file_contents))
+        text = ""
+        page_count = len(pdf_reader.pages)
+        
+        for page in pdf_reader.pages:
+            text += page.extract_text() + "\n"
+        
+        return text, page_count
+    except Exception as e:
+        raise HTTPException(status_code=400, detail=f"Failed to extract PDF text: {str(e)}")
+
+def analyze_document_content(text: str, filename: str) -> dict:
+    """Analyze extracted text and generate insights"""
+    # Simple analysis - in production you'd use AI/ML here
+    words = text.split()
+    word_count = len(words)
+    
+    # Estimate reading time (average 200 words per minute)
+    reading_minutes = max(1, word_count // 200)
+    reading_time = f"{reading_minutes} minutes" if reading_minutes < 60 else f"{reading_minutes // 60}h {reading_minutes % 60}m"
+    
+    # Extract potential key topics (basic keyword extraction)
+    # In production, you'd use NLP libraries like spaCy, NLTK, or AI APIs
+    common_tech_terms = [
+        "machine learning", "artificial intelligence", "neural network", "deep learning",
+        "algorithm", "data science", "python", "tensorflow", "pytorch", "model",
+        "training", "prediction", "classification", "regression", "clustering"
+    ]
+    
+    text_lower = text.lower()
+    detected_topics = [term for term in common_tech_terms if term in text_lower]
+    
+    # Generate sections based on common document patterns
+    sections = []
+    if "introduction" in text_lower:
+        sections.append({"title": "Introduction", "pages": "1-2"})
+    if "method" in text_lower or "approach" in text_lower:
+        sections.append({"title": "Methodology", "pages": "3-5"})
+    if "result" in text_lower or "finding" in text_lower:
+        sections.append({"title": "Results", "pages": "6-8"})
+    if "conclusion" in text_lower:
+        sections.append({"title": "Conclusion", "pages": "9-10"})
+    
+    # Default sections if none detected
+    if not sections:
+        sections = [
+            {"title": "Content Overview", "pages": "1-3"},
+            {"title": "Main Discussion", "pages": "4-7"},
+            {"title": "Summary", "pages": "8-10"}
+        ]
+    
+    # Determine complexity based on vocabulary and length
+    complexity = "beginner"
+    if word_count > 5000:
+        complexity = "intermediate"
+    if word_count > 10000 or len(detected_topics) > 5:
+        complexity = "advanced"
+    
+    return {
+        "word_count": word_count,
+        "reading_time": reading_time,
+        "detected_topics": detected_topics[:8],  # Limit to 8 topics
+        "sections": sections,
+        "complexity": complexity,
+        "estimated_slides": min(12, max(4, len(sections) * 2))
+    }
+
+# PDF Upload Endpoint
+@app.post("/api/upload", response_model=UploadResult)
+async def upload_pdf(file: UploadFile = File(...)):
+    """Process uploaded PDF and extract content for presentation generation"""
+    
+    # Validate file type
+    if not file.content_type == "application/pdf":
+        raise HTTPException(status_code=400, detail="Only PDF files are allowed")
+    
+    # Read file contents
+    file_contents = await file.read()
+    file_size_mb = len(file_contents) / (1024 * 1024)
+    
+    # Validate file size (10MB limit)
+    if file_size_mb > 10:
+        raise HTTPException(status_code=400, detail="File size must be less than 10MB")
+    
+    start_time = time.time()
+    
+    try:
+        # Extract text from PDF
+        extracted_text, page_count = extract_text_from_pdf(file_contents)
+        
+        # Analyze content
+        analysis = analyze_document_content(extracted_text, file.filename)
+        
+        processing_time = round(time.time() - start_time, 2)
+        
+        # Create result
+        result = UploadResult(
+            success=True,
+            message=f"Successfully processed '{file.filename}'",
+            filename=file.filename,
+            fileSize=f"{file_size_mb:.2f} MB",
+            pages=page_count,
+            readingTime=analysis["reading_time"],
+            topics=len(analysis["detected_topics"]),
+            processingTime=f"{processing_time} seconds",
+            keyTopics=analysis["detected_topics"],
+            extractedSections=analysis["sections"],
+            generatedSlides=analysis["estimated_slides"],
+            detectedLanguage="English",  # Could add language detection
+            complexity=analysis["complexity"],
+            extractedText=extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text
+        )
+        
+        print(f"📄 PDF Processed: {file.filename} ({file_size_mb:.2f}MB)")
+        print(f"📊 Analysis: {page_count} pages, {len(analysis['detected_topics'])} topics")
+        print(f"⏱️  Processing time: {processing_time}s")
+        
+        return result
+        
+    except Exception as e:
+        print(f"❌ PDF Processing Error: {str(e)}")
+        raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 

@@ -1,6 +1,6 @@
-import { ReferenceLink, SlideContent, LiveUpdate, ConversationMessage, DocumentSummary } from '@/types/api';
+import { ReferenceLink, SlideContent, LiveUpdate, ConversationMessage, DocumentSummary, UploadResult } from '@/types/api';
 
-const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || '';
+const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
 export class ApiClient {
   private static async request<T>(endpoint: string, options?: RequestInit): Promise<T> {
@@ -48,5 +48,23 @@ export class ApiClient {
 
   static async getDocumentSummary(): Promise<DocumentSummary> {
     return this.request<DocumentSummary>('/api/document-summary');
+  }
+
+  static async uploadPDF(file: File): Promise<UploadResult> {
+    const formData = new FormData();
+    formData.append('file', file);
+
+    const response = await fetch(`${API_BASE_URL}/api/upload`, {
+      method: 'POST',
+      body: formData,
+      // Don't set Content-Type header for FormData, let browser set it
+    });
+
+    if (!response.ok) {
+      const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
+      throw new Error(errorData.detail || `Upload Error: ${response.status} ${response.statusText}`);
+    }
+
+    return response.json();
   }
 } 
