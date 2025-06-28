@@ -2,29 +2,17 @@
 from pydantic import BaseModel
 from typing import List, Optional
 
-class ReferenceLink(BaseModel):
-    title: str
-    url: str
-    description: str
-
 class SlideContent(BaseModel):
     title: str
     content: str
-    image_url: str
+    image_description: str
+    speaker_notes: str
     slide_number: int
 
 class LiveUpdate(BaseModel):
     message: str
     timestamp: str
     type: str  # "info", "question", "announcement"
-
-class ConversationMessage(BaseModel):
-    id: int
-    user: str
-    message: str
-    timestamp: str
-    type: str  # "question", "answer", "comment"
-
 
 class SectionMultimodalEnhancement(BaseModel):
     summary: Optional[str] = None
@@ -60,7 +48,6 @@ class DocumentSummary(BaseModel):
     authors: List[str]
     publication_date: str
     sections: Optional[ResearchPaperSection] = None
-
 
 class UploadResult(BaseModel):
     success: bool

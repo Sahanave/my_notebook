@@ -1,4 +1,4 @@
-import { ReferenceLink, SlideContent, LiveUpdate, ConversationMessage, DocumentSummary, UploadResult } from '@/types/api';
+import { SlideContent, LiveUpdate, DocumentSummary, UploadResult } from '@/types/api';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -24,30 +24,35 @@ export class ApiClient {
   }
 
   static async getSlide(slideNumber: number): Promise<SlideContent> {
-    return this.request<SlideContent>(`/api/slides/${slideNumber}`);
+    const response = await fetch(`${API_BASE_URL}/api/slides/${slideNumber}`);
+    if (!response.ok) {
+      throw new Error(`Failed to fetch slide ${slideNumber}`);
+    }
+    return response.json();
   }
 
-  static async getReferences(): Promise<ReferenceLink[]> {
-    return this.request<ReferenceLink[]>('/api/references');
-  }
-
-  static async getConversation(): Promise<ConversationMessage[]> {
-    return this.request<ConversationMessage[]>('/api/conversation');
-  }
-
-  static async addMessage(message: string, user: string = 'Anonymous'): Promise<ConversationMessage> {
-    return this.request<ConversationMessage>('/api/conversation', {
-      method: 'POST',
-      body: JSON.stringify({ message, user }),
-    });
+  static async getSlidesMetadata(): Promise<{ total_slides: number; available_slides: number[] }> {
+    const response = await fetch(`${API_BASE_URL}/api/slides/metadata`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch slides metadata');
+    }
+    return response.json();
   }
 
   static async getLiveUpdates(): Promise<LiveUpdate[]> {
-    return this.request<LiveUpdate[]>('/api/live-updates');
+    const response = await fetch(`${API_BASE_URL}/api/live-updates`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch live updates');
+    }
+    return response.json();
   }
 
   static async getDocumentSummary(): Promise<DocumentSummary> {
-    return this.request<DocumentSummary>('/api/document-summary');
+    const response = await fetch(`${API_BASE_URL}/api/document-summary`);
+    if (!response.ok) {
+      throw new Error('Failed to fetch document summary');
+    }
+    return response.json();
   }
 
   static async uploadPDF(file: File): Promise<UploadResult> {
@@ -57,21 +62,30 @@ export class ApiClient {
     const response = await fetch(`${API_BASE_URL}/api/upload`, {
       method: 'POST',
       body: formData,
-      // Don't set Content-Type header for FormData, let browser set it
     });
 
     if (!response.ok) {
-      const errorData = await response.json().catch(() => ({ detail: 'Upload failed' }));
-      throw new Error(errorData.detail || `Upload Error: ${response.status} ${response.statusText}`);
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to upload PDF');
     }
 
     return response.json();
   }
 
   static async generateSlides(): Promise<SlideContent[]> {
-    return this.request<SlideContent[]>('/api/generate-slides', {
+    const response = await fetch(`${API_BASE_URL}/api/generate-slides`, {
       method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+      },
     });
+
+    if (!response.ok) {
+      const errorData = await response.json();
+      throw new Error(errorData.detail || 'Failed to generate slides');
+    }
+
+    return response.json();
   }
 
   static async regenerateSlides(): Promise<SlideContent[]> {
@@ -79,6 +93,4 @@ export class ApiClient {
       method: 'POST',
     });
   }
-
-
 } 

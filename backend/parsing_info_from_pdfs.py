@@ -2,16 +2,15 @@
 # Imports
 
 from openai import OpenAI
-from concurrent.futures import ThreadPoolExecutor
-from tqdm import tqdm
-import concurrent
 import PyPDF2
-import os
-import pandas as pd
-import base64
-from data_models import SlideContent, ReferenceLink, ConversationMessage, LiveUpdate, DocumentSummary, UploadResult
+import io
 import json
-from typing import List
+import os
+from typing import List, Dict, Any, Optional, Union
+from concurrent.futures import ThreadPoolExecutor
+import datetime
+from tqdm import tqdm
+from data_models import SlideContent, LiveUpdate, DocumentSummary, UploadResult
 
 
 def generate_questions(client, summary: DocumentSummary):
@@ -73,133 +72,6 @@ def extract_text_from_pdf(pdf_path):
     except Exception as e:
         print(f"Error reading {pdf_path}: {e}")
     return text
-
-def generate_slides_from_content(client, content: str, title: str = "How to Read Research Papers") -> List[SlideContent]:
-    """Generate slides from Andrew Ng's research paper reading methodology"""
-    
-    # Clean up the Andrew Ng content
-    cleaned_content = """
-    How to Read Research Papers - Andrew Ng's Methodology
-    
-    Take multiple passes through the paper
-    Worst strategy: reading from the first word until the last word!
-    
-    Pass 1: Read the Title/Abstract/Figures
-    - In deep learning, there are many papers where the entire paper is summarized in one or two figures
-    - You can often get a good understanding about what the whole paper is about without reading much of the text
-    
-    Pass 2: Read the Introduction/Conclusions/Figures (again)/Skim Rest
-    - Abstract, intro, and conclusion are where authors summarize their work most carefully
-    - These are the most useful parts to read
-    - Neural network architectures are often written up in a table
-    - Maybe also skim Related work section for context
-    
-    Pass 3: Read the Paper, but skip the maths
-    - Focus on understanding the concepts first
-    
-    Pass 4: Read the Paper, but skip parts that don't make sense
-    - In cutting edge papers we don't always know what is really important
-    - Some great, highly cited papers have groundbreaking parts and other parts which later turn out to be unimportant
-    - Maybe what was the key part of the algorithm wasn't what the authors thought
-    
-    Questions to Keep in Mind:
-    - What did the authors try to accomplish?
-    - What were the key elements of the approach?
-    - What can you use yourself?
-    - What other references do you want to follow?
-    
-    Deeper Understanding:
-    
-    Mathematics:
-    - Read through it and make notes
-    - Try to re-derive from scratch on a blank piece of paper
-    - As you get good at this you will gain the ability to derive novel algorithms yourself
-    - Learn from the masters, not from their students
-    
-    Code:
-    - Lightweight: download and run their open-source code
-    - Deeper: reimplement their code from scratch
-    
-    General Advice:
-    - Steady reading, not short bursts
-    - Better off reading 2-3 papers a week for the next year, than cramming everything over Christmas
-    """
-
-    prompt = f"""
-    Create a slide presentation from this content about how to read research papers effectively.
-    Create 3-5 slides that break down the methodology into clear, digestible sections.
-    Each slide should have a clear title and bullet points.
-    Make it engaging and educational for researchers and students.
-    
-    Content to convert to slides:
-    {cleaned_content}
-    
-    Return as a list of slides with title, content, and slide numbers.
-    """
-
-    try:
-        slides_schema = {
-            "name": "generate_slides",
-            "description": "Generate presentation slides from content",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "slides": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title": {"type": "string"},
-                                "content": {"type": "string"},
-                                "slide_number": {"type": "integer"}
-                            },
-                            "required": ["title", "content", "slide_number"]
-                        }
-                    }
-                },
-                "required": ["slides"]
-            }
-        }
-
-        response = client.chat.completions.create(
-            model="gpt-4",
-            messages=[
-                {"role": "system", "content": "You are an expert presentation designer. Create clear, engaging slides for academic content."},
-                {"role": "user", "content": prompt}
-            ],
-            tools=[{"type": "function", "function": slides_schema}],
-            tool_choice={"type": "function", "function": {"name": "generate_slides"}}
-        )
-
-        if response.choices and response.choices[0].message.tool_calls:
-            tool_call = response.choices[0].message.tool_calls[0]
-            structured_json = json.loads(tool_call.function.arguments)
-            
-            slides = []
-            for slide_data in structured_json["slides"]:
-                slide = SlideContent(
-                    title=slide_data["title"],
-                    content=slide_data["content"],
-                    image_url="https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800&h=600&fit=crop&crop=center",  # Generic academic image
-                    slide_number=slide_data["slide_number"]
-                )
-                slides.append(slide)
-            
-            return slides
-        else:
-            raise Exception("No structured response from OpenAI")
-    
-    except Exception as e:
-        print(f"Error generating slides: {e}")
-        # Return fallback slides
-        return [
-            SlideContent(
-                title="How to Read Research Papers",
-                content="Andrew Ng's methodology for effective paper reading",
-                image_url="https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800&h=600&fit=crop&crop=center",
-                slide_number=1
-            )
-        ]
 
 def generate_summary(client, pdf_path):
     text = extract_text_from_pdf(pdf_path)
@@ -421,26 +293,33 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
     for qa in qa_pairs:
         qa_content += f"Q: {qa['question']}\nA: {qa['answer']}\n\n"
     
+   
     prompt = f"""
-    Create educational slides based on these Q&A pairs from a document analysis.
-    Use the questions and answers to create informative slides that teach the key concepts.
-    
-    Document Information:
+    Create a simple, practical presentation from this Q&A content. Focus on making slides that are easy to present and understand.
+
+    **Document Context:**
     Title: {document_summary.title}
     Type: {document_summary.document_type}
     Main Topics: {', '.join(document_summary.main_topics)}
-    
-    Q&A Content to convert to slides:
+
+    **Source Q&A Content:**
     {qa_content}
-    
-    Create 4-6 slides that:
-    1. Start with a title slide introducing the document
-    2. Each slide should cover 1-2 related Q&A pairs
-    3. Transform questions into slide titles and answers into bullet points
-    4. Make content educational and easy to understand
-    5. Include relevant examples from the answers
-    
-    Return as a list of slides with title, content, and slide numbers.
+
+    **Instructions:**
+    Create 4-6 slides from this content. For each slide, provide:
+
+    1. **Title**: Clear, descriptive slide title
+    2. **Content**: Main bullet points or key information for the slide (3-5 bullet points max)
+    3. **Image Description**: Describe what visual/image would help explain this slide (e.g., "diagram showing transformer architecture", "chart comparing model performance", "simple flowchart of the process")
+    4. **Speaker Notes**: What the presenter should say when presenting this slide (2-3 sentences)
+
+    Keep it simple and practical - focus on the key insights from the Q&A that would help someone understand the main concepts of this document.
+
+    Example format:
+    Title: "Understanding the Core Concept"
+    Content: "• Main point 1 • Main point 2 • Main point 3"
+    Image Description: "Diagram showing the relationship between components"
+    Speaker Notes: "This slide introduces the fundamental concept. The key insight here is how these components work together."
     """
 
     try:
@@ -457,9 +336,11 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
                             "properties": {
                                 "title": {"type": "string"},
                                 "content": {"type": "string"},
+                                "image_description": {"type": "string"},
+                                "speaker_notes": {"type": "string"},
                                 "slide_number": {"type": "integer"}
                             },
-                            "required": ["title", "content", "slide_number"]
+                            "required": ["title", "content", "image_description", "speaker_notes", "slide_number"]
                         }
                     }
                 },
@@ -470,7 +351,7 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are an expert educator who creates clear, engaging slides from Q&A content. Make slides informative and educational."},
+                {"role": "system", "content": "You are an expert educator who creates clear, engaging slides from Q&A content. Make slides informative and educational with well-structured bullet points."},
                 {"role": "user", "content": prompt}
             ],
             tools=[{"type": "function", "function": slides_schema}],
@@ -479,14 +360,42 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
 
         if response.choices and response.choices[0].message.tool_calls:
             tool_call = response.choices[0].message.tool_calls[0]
-            structured_json = json.loads(tool_call.function.arguments)
+            
+            # Clean the JSON arguments to handle control characters
+            raw_json = tool_call.function.arguments
+            print(f"🔍 Raw JSON length: {len(raw_json)}")
+            
+            # Replace common control characters that break JSON parsing
+            import re
+            cleaned_json = raw_json.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+            
+            # Remove any other control characters (ASCII 0-31 except \n, \r, \t)
+            cleaned_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', cleaned_json)
+            
+            try:
+                structured_json = json.loads(cleaned_json)
+            except json.JSONDecodeError as json_error:
+                print(f"🔍 JSON decode error: {json_error}")
+                print(f"🔍 Problematic JSON snippet: {cleaned_json[max(0, json_error.pos-50):json_error.pos+50]}")
+                # Try with a more aggressive cleaning approach
+                import unicodedata
+                cleaned_json = ''.join(ch for ch in raw_json if unicodedata.category(ch)[0] != 'C' or ch in '\n\r\t')
+                cleaned_json = cleaned_json.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
+                structured_json = json.loads(cleaned_json)
             
             slides = []
             for slide_data in structured_json["slides"]:
+                # Clean the content for any remaining control characters
+                clean_title = slide_data["title"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                clean_content = slide_data["content"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                clean_image_desc = slide_data["image_description"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                clean_speaker_notes = slide_data["speaker_notes"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
+                
                 slide = SlideContent(
-                    title=slide_data["title"],
-                    content=slide_data["content"],
-                    image_url="https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800&h=600&fit=crop&crop=center",  # Academic image
+                    title=clean_title,
+                    content=clean_content,
+                    image_description=clean_image_desc,
+                    speaker_notes=clean_speaker_notes,
                     slide_number=slide_data["slide_number"]
                 )
                 slides.append(slide)
@@ -502,7 +411,8 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
             SlideContent(
                 title=document_summary.title,
                 content=f"Educational presentation based on Q&A analysis of {document_summary.document_type}",
-                image_url="https://images.unsplash.com/photo-1434030216411-0b793f4b4173?w=800&h=600&fit=crop&crop=center",
+                image_description="Title slide with document cover or main concept visualization",
+                speaker_notes=f"Welcome to this presentation about {document_summary.title}. Today we'll explore the key concepts from this {document_summary.document_type}.",
                 slide_number=1
             )
         ]

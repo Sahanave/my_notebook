@@ -1,17 +1,16 @@
 "use client";
 
 import React, { useState, useEffect, useRef } from "react";
-import { SlideContent, ReferenceLink, LiveUpdate } from "@/types/api";
+import { SlideContent, LiveUpdate } from "@/types/api";
 import { ApiClient } from "@/lib/api";
-import Conversation from "@/components/Conversation";
 import DocumentSummaryComponent, { DocumentSummaryRef } from "@/components/DocumentSummary";
 import DocumentUpload from "@/components/DocumentUpload";
 
 export default function Home() {
   const [currentSlide, setCurrentSlide] = useState<SlideContent | null>(null);
-  const [references, setReferences] = useState<ReferenceLink[]>([]);
   const [liveUpdates, setLiveUpdates] = useState<LiveUpdate[]>([]);
   const [currentSlideNumber, setCurrentSlideNumber] = useState(1);
+  const [totalSlides, setTotalSlides] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
@@ -27,14 +26,19 @@ export default function Home() {
   const loadInitialData = async () => {
     try {
       setLoading(true);
-      const [slide, refs, updates] = await Promise.all([
-        ApiClient.getSlide(currentSlideNumber),
-        ApiClient.getReferences(),
+      const [metadata, updates] = await Promise.all([
+        ApiClient.getSlidesMetadata(),
         ApiClient.getLiveUpdates()
       ]);
       
-      setCurrentSlide(slide);
-      setReferences(refs);
+      setTotalSlides(metadata.total_slides);
+      
+      // Only load first slide if slides are available
+      if (metadata.total_slides > 0) {
+        const slide = await ApiClient.getSlide(1);
+        setCurrentSlide(slide);
+      }
+      
       setLiveUpdates(updates);
     } catch (err) {
       setError("Failed to load content");
@@ -52,15 +56,27 @@ export default function Home() {
       const newSlides = await ApiClient.generateSlides();
       console.log('✅ Slides generated successfully:', newSlides);
       
-      // Refresh the current slide to show the new content
-      if (newSlides.length > 0) {
-        setCurrentSlide(newSlides[0]);
+      // Wait a moment for backend to update, then refresh slides metadata
+      await new Promise(resolve => setTimeout(resolve, 500));
+      
+      // Get updated slides metadata from backend
+      const metadata = await ApiClient.getSlidesMetadata();
+      console.log('📊 Updated slides metadata:', metadata);
+      
+      // Update total slides count and load first slide from backend
+      setTotalSlides(metadata.total_slides);
+      
+      if (metadata.total_slides > 0) {
+        // Fetch the first slide from the updated backend
+        const firstSlide = await ApiClient.getSlide(1);
+        setCurrentSlide(firstSlide);
         setCurrentSlideNumber(1);
+        console.log('📄 Loaded first slide:', firstSlide);
       }
       
       // Show success message
       setLiveUpdates(prev => [{
-        message: `Generated ${newSlides.length} slides from your document content!`,
+        message: `Generated ${metadata.total_slides} slides from your document content!`,
         timestamp: new Date().toISOString(),
         type: "info"
       }, ...prev]);
@@ -74,12 +90,18 @@ export default function Home() {
   };
 
   const changeSlide = async (slideNumber: number) => {
+    // Check bounds before attempting to load
+    if (slideNumber < 1 || slideNumber > totalSlides) {
+      return;
+    }
+    
     try {
       const slide = await ApiClient.getSlide(slideNumber);
       setCurrentSlide(slide);
       setCurrentSlideNumber(slideNumber);
     } catch (err) {
       console.error("Error loading slide:", err);
+      // If slide doesn't exist, stay on current slide
     }
   };
 
@@ -214,17 +236,18 @@ export default function Home() {
                 <div className="border-l border-gray-300 pl-2 ml-2">
                   <button
                     onClick={() => changeSlide(Math.max(1, currentSlideNumber - 1))}
-                    disabled={currentSlideNumber <= 1}
-                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
+                    disabled={currentSlideNumber <= 1 || totalSlides === 0}
+                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     ← Prev
                   </button>
                   <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded mx-1">
-                    Slide {currentSlideNumber}
+                    {totalSlides > 0 ? `Slide ${currentSlideNumber} of ${totalSlides}` : 'No slides'}
                   </span>
                   <button
                     onClick={() => changeSlide(currentSlideNumber + 1)}
-                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                    disabled={currentSlideNumber >= totalSlides || totalSlides === 0}
+                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed"
                   >
                     Next →
                   </button>
@@ -234,17 +257,21 @@ export default function Home() {
             
             <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-8 min-h-[400px]">
               {currentSlide ? (
-                <div className="text-center">
-                  <img 
-                    src={currentSlide.image_url} 
-                    alt={currentSlide.title}
-                    className="w-full max-w-2xl mx-auto rounded-lg shadow-md mb-4"
-                  />
-                  <p className="text-gray-700 text-lg">{currentSlide.content}</p>
+                <div className="space-y-6">
+                  {/* Slide Title */}
+                  <h3 className="text-2xl font-semibold text-gray-900 text-center border-b border-gray-300 pb-3">{currentSlide.title}</h3>
+                  
+                  {/* Main Content */}
+                  <div className="text-gray-700 text-lg leading-relaxed">
+                    <div className="whitespace-pre-line">{currentSlide.content}</div>
+                  </div>
                 </div>
               ) : (
-                <div className="flex items-center justify-center h-full">
-                  <p className="text-gray-600 text-lg">Loading slide...</p>
+                <div className="flex items-center justify-center h-full text-gray-500">
+                  <div className="text-center">
+                    <p className="text-xl mb-2">📖</p>
+                    <p>No slides available. Upload a document and generate slides to get started!</p>
+                  </div>
                 </div>
               )}
             </div>
@@ -265,43 +292,6 @@ export default function Home() {
                 <p className="text-sm text-gray-500 mt-2">Coming soon...</p>
               </div>
             </div>
-          </div>
-        </div>
-
-        {/* Bottom Section */}
-        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
-          {/* Reference Links */}
-          <div>
-            <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
-              <span className="mr-2">📚</span>
-              Reference Links
-            </h2>
-            <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-6">
-              <ul className="space-y-3">
-                {references.map((ref, index) => (
-                  <li key={index}>
-                    <a 
-                      href={ref.url}
-                      target="_blank"
-                      rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 hover:underline transition-colors block"
-                    >
-                      <span className="font-medium">{ref.title}</span>
-                      <p className="text-sm text-gray-600 mt-1">{ref.description}</p>
-                    </a>
-                  </li>
-                ))}
-              </ul>
-            </div>
-          </div>
-
-          {/* Conversation Component */}
-          <div>
-            <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
-              <span className="mr-2">💬</span>
-              Live Q&A
-            </h2>
-            <Conversation />
           </div>
         </div>
       </div>

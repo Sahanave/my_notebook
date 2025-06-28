@@ -8,9 +8,11 @@ import time
 import os
 import tempfile
 from datetime import datetime
+import openai
 from openai import OpenAI
-from data_models import SlideContent, ReferenceLink, ConversationMessage, LiveUpdate, DocumentSummary, UploadResult
-from parsing_info_from_pdfs import upload_single_pdf, generate_summary, create_vector_store, generate_slides_from_content, generate_qa_pairs_from_document, generate_slides_from_qa_pairs
+from concurrent.futures import ThreadPoolExecutor
+from data_models import SlideContent, LiveUpdate, DocumentSummary, UploadResult
+from parsing_info_from_pdfs import upload_single_pdf, generate_summary, create_vector_store, generate_qa_pairs_from_document, generate_slides_from_qa_pairs
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -40,69 +42,28 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-
-
 # Sample data (placeholder content)
 sample_slides = [
     SlideContent(
-        title="Welcome to Claude Agents",
-        content="Building intelligent agents with Claude on Vertex AI",
-        image_url="https://via.placeholder.com/800x600/4F46E5/FFFFFF?text=Slide+1",
+        title="Welcome to Are You Taking Notes",
+        content="• AI-powered document analysis and slide generation • Upload PDFs and get instant summaries • Generate educational presentations automatically",
+        image_description="Welcome screen with document upload icon and AI brain illustration",
+        speaker_notes="Welcome everyone to our AI-powered note-taking system. This tool helps you analyze documents and create presentations quickly.",
         slide_number=1
     ),
     SlideContent(
-        title="Architecture Overview",
-        content="Understanding the MCP (Model Context Protocol) integration",
-        image_url="https://via.placeholder.com/800x600/7C3AED/FFFFFF?text=Slide+2",
+        title="How It Works",
+        content="• Upload your PDF document • AI analyzes and summarizes content • Generate Q&A pairs automatically • Create presentation slides",
+        image_description="Flowchart showing the 4-step process from upload to slides",
+        speaker_notes="The process is simple: upload a document, let AI analyze it, and get both summaries and presentation slides automatically generated.",
         slide_number=2
     ),
     SlideContent(
-        title="Implementation Guide",
-        content="Step-by-step implementation with code examples",
-        image_url="https://via.placeholder.com/800x600/DC2626/FFFFFF?text=Slide+3",
+        title="Get Started",
+        content="• Click the upload area above • Select a PDF file (max 10MB) • Wait for AI processing • View your generated slides",
+        image_description="Screenshot of the upload interface with drag-and-drop area highlighted",
+        speaker_notes="Ready to try it? Simply upload a PDF using the interface above and watch the AI work its magic.",
         slide_number=3
-    )
-]
-
-sample_references = [
-    ReferenceLink(
-        title="Configure Claude Code on Vertex",
-        url="https://cloud.google.com/vertex-ai/docs/generative-ai/models/claude",
-        description="Official Google Cloud documentation for Claude on Vertex AI"
-    ),
-    ReferenceLink(
-        title="Learn more about MCP",
-        url="https://docs.anthropic.com/claude/docs/mcp",
-        description="Model Context Protocol documentation"
-    ),
-    ReferenceLink(
-        title="Get started with Claude on Vertex AI",
-        url="https://console.cloud.google.com/vertex-ai",
-        description="Google Cloud Vertex AI Console"
-    )
-]
-
-sample_conversation = [
-    ConversationMessage(
-        id=1,
-        user="Alice",
-        message="How do we handle authentication with Claude on Vertex AI?",
-        timestamp="2024-12-28T10:30:00Z",
-        type="question"
-    ),
-    ConversationMessage(
-        id=2,
-        user="Presenter",
-        message="Great question! Authentication is handled through Google Cloud IAM. You'll need to set up service accounts with the appropriate permissions.",
-        timestamp="2024-12-28T10:31:00Z",
-        type="answer"
-    ),
-    ConversationMessage(
-        id=3,
-        user="Bob",
-        message="What about rate limiting? Are there any constraints we should be aware of?",
-        timestamp="2024-12-28T10:33:00Z",
-        type="question"
     )
 ]
 
@@ -154,41 +115,23 @@ async def get_slides():
     """Get all presentation slides"""
     return sample_slides
 
+@app.get("/api/slides/metadata")
+async def get_slides_metadata():
+    """Get slide metadata including total count"""
+    return {
+        "total_slides": len(sample_slides),
+        "available_slides": [slide.slide_number for slide in sample_slides]
+    }
+
 @app.get("/api/slides/{slide_number}", response_model=SlideContent)
 async def get_slide(slide_number: int):
     """Get a specific slide by number"""
     for slide in sample_slides:
         if slide.slide_number == slide_number:
             return slide
-    return SlideContent(
-        title="Slide Not Found",
-        content="The requested slide is not available",
-        image_url="https://via.placeholder.com/800x600/6B7280/FFFFFF?text=Not+Found",
-        slide_number=slide_number
-    )
-
-@app.get("/api/references", response_model=List[ReferenceLink])
-async def get_references():
-    """Get all reference links"""
-    return sample_references
-
-@app.get("/api/conversation", response_model=List[ConversationMessage])
-async def get_conversation():
-    """Get the current conversation/Q&A"""
-    return sample_conversation
-
-@app.post("/api/conversation", response_model=ConversationMessage)
-async def add_message(message: str, user: str = "Anonymous"):
-    """Add a new message to the conversation"""
-    new_message = ConversationMessage(
-        id=len(sample_conversation) + 1,
-        user=user,
-        message=message,
-        timestamp="2024-12-28T10:40:00Z",  # In real app, use current timestamp
-        type="question"
-    )
-    sample_conversation.append(new_message)
-    return new_message
+    
+    # Return 404 if slide doesn't exist
+    raise HTTPException(status_code=404, detail=f"Slide {slide_number} not found")
 
 @app.get("/api/live-updates", response_model=List[LiveUpdate])
 async def get_live_updates():
@@ -306,32 +249,6 @@ async def generate_slides_from_qa():
         print(f"❌ {error_msg}")
         print(f"🔍 Error details: {type(e).__name__}: {e}")
         raise HTTPException(status_code=500, detail=error_msg)
-
-@app.post("/api/generate-andrew-ng-slides", response_model=List[SlideContent])
-async def generate_andrew_ng_slides():
-    """Generate slides based on Andrew Ng's research paper reading methodology"""
-    global openai_client
-    
-    if not openai_client:
-        raise HTTPException(status_code=500, detail="OpenAI client not configured")
-    
-    try:
-        # Generate slides using Andrew Ng's methodology
-        slides = generate_slides_from_content(
-            client=openai_client,
-            content="",  # The content is already embedded in the function
-            title="How to Read Research Papers"
-        )
-        
-        # Update the global sample_slides with generated content
-        global sample_slides
-        sample_slides = slides
-        
-        return slides
-        
-    except Exception as e:
-        print(f"Error generating Andrew Ng slides: {e}")
-        raise HTTPException(status_code=500, detail=f"Failed to generate slides: {str(e)}")
 
 # Helper function to parse AI summary into DocumentSummary structure
 def parse_ai_summary_to_document_summary(ai_summary: str, filename: str) -> DocumentSummary:
