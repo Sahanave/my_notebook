@@ -67,4 +67,18 @@ export class ApiClient {
 
     return response.json();
   }
+
+  static async generateSlides(): Promise<SlideContent[]> {
+    return this.request<SlideContent[]>('/api/generate-slides', {
+      method: 'POST',
+    });
+  }
+
+  static async regenerateSlides(): Promise<SlideContent[]> {
+    return this.request<SlideContent[]>('/api/regenerate-slides', {
+      method: 'POST',
+    });
+  }
+
+
 } 

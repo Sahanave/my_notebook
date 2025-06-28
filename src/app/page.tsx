@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
-import { SlideContent, ReferenceLink, LiveUpdate, DocumentSummary } from "@/types/api";
+import React, { useState, useEffect, useRef } from "react";
+import { SlideContent, ReferenceLink, LiveUpdate } from "@/types/api";
 import { ApiClient } from "@/lib/api";
 import Conversation from "@/components/Conversation";
-import DocumentSummaryComponent from "@/components/DocumentSummary";
+import DocumentSummaryComponent, { DocumentSummaryRef } from "@/components/DocumentSummary";
 import DocumentUpload from "@/components/DocumentUpload";
 
 export default function Home() {
@@ -14,10 +14,11 @@ export default function Home() {
   const [currentSlideNumber, setCurrentSlideNumber] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
+  const [slideGenerating, setSlideGenerating] = useState(false);
   
-  // Document summary state - comes from upload results
-  const [documentSummary, setDocumentSummary] = useState<DocumentSummary | null>(null);
-  const [summaryLoading, setSummaryLoading] = useState(false);
+  // Ref to access DocumentSummary refresh function
+  const documentSummaryRef = useRef<DocumentSummaryRef>(null);
 
   useEffect(() => {
     loadInitialData();
@@ -43,6 +44,35 @@ export default function Home() {
     }
   };
 
+  const generateSlides = async () => {
+    try {
+      setSlideGenerating(true);
+      console.log('🔄 Generating slides (including Q&A processing)...');
+      
+      const newSlides = await ApiClient.generateSlides();
+      console.log('✅ Slides generated successfully:', newSlides);
+      
+      // Refresh the current slide to show the new content
+      if (newSlides.length > 0) {
+        setCurrentSlide(newSlides[0]);
+        setCurrentSlideNumber(1);
+      }
+      
+      // Show success message
+      setLiveUpdates(prev => [{
+        message: `Generated ${newSlides.length} slides from your document content!`,
+        timestamp: new Date().toISOString(),
+        type: "info"
+      }, ...prev]);
+      
+    } catch (err) {
+      console.error('❌ Error generating slides:', err);
+      setError("Failed to generate slides. Please try again.");
+    } finally {
+      setSlideGenerating(false);
+    }
+  };
+
   const changeSlide = async (slideNumber: number) => {
     try {
       const slide = await ApiClient.getSlide(slideNumber);
@@ -53,22 +83,12 @@ export default function Home() {
     }
   };
 
-  const handleUploadComplete = (result: any) => {
-    console.log('Upload completed:', result);
-    
-    // Set the document summary directly from upload results
-    if (result.documentSummary) {
-      setDocumentSummary(result.documentSummary);
-      console.log('✅ Document summary updated from upload results');
-    }
-  };
-
   if (loading) {
     return (
       <div className="min-h-screen bg-gray-50 p-4 flex items-center justify-center">
         <div className="text-center">
           <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600 mx-auto mb-4"></div>
-          <p className="text-gray-600">Loading content...</p>
+          <p className="text-gray-600">Loading presentation...</p>
         </div>
       </div>
     );
@@ -81,7 +101,7 @@ export default function Home() {
           <p className="text-red-600 mb-4">{error}</p>
           <button 
             onClick={loadInitialData}
-            className="px-4 py-2 bg-blue-600 text-white rounded hover:bg-blue-700"
+            className="bg-blue-600 text-white px-4 py-2 rounded-md hover:bg-blue-700"
           >
             Try Again
           </button>
@@ -124,7 +144,24 @@ export default function Home() {
             <span className="mr-2">📤</span>
             Upload Document
           </h2>
-          <DocumentUpload onUploadComplete={handleUploadComplete} />
+          <DocumentUpload onUploadComplete={async (result) => {
+            console.log('Upload completed:', result);
+            
+            // Refresh the document summary immediately after upload
+            try {
+              setSummaryRefreshing(true);
+              await documentSummaryRef.current?.refreshSummary();
+              console.log('✅ Document summary refreshed successfully');
+              
+              // Show success notification briefly
+              setTimeout(() => {
+                setSummaryRefreshing(false);
+              }, 1000);
+            } catch (error) {
+              console.error('❌ Failed to refresh document summary:', error);
+              setSummaryRefreshing(false);
+            }
+          }} />
         </div>
 
         {/* Document Summary Section */}
@@ -132,11 +169,14 @@ export default function Home() {
           <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
             <span className="mr-2">📄</span>
             Document Summary
+            {summaryRefreshing && (
+              <span className="ml-2 text-sm text-blue-600 flex items-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-1"></div>
+                Updating...
+              </span>
+            )}
           </h2>
-          <DocumentSummaryComponent 
-            summary={documentSummary} 
-            loading={summaryLoading}
-          />
+          <DocumentSummaryComponent ref={documentSummaryRef} />
         </div>
 
         {/* Main Content Area */}
@@ -149,80 +189,119 @@ export default function Home() {
                 {currentSlide?.title || "Presentation Slides"}
               </h2>
               
-              {/* Slide Navigation */}
-              <div className="flex space-x-2">
+              {/* Slide Controls */}
+              <div className="flex items-center space-x-2">
+                {/* Slide Generation Buttons */}
                 <button
-                  onClick={() => changeSlide(Math.max(1, currentSlideNumber - 1))}
-                  disabled={currentSlideNumber <= 1}
-                  className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
+                  onClick={generateSlides}
+                  disabled={slideGenerating}
+                  className="px-3 py-1 bg-green-600 text-white rounded hover:bg-green-700 disabled:opacity-50 disabled:cursor-not-allowed flex items-center text-sm"
                 >
-                  ← Prev
+                  {slideGenerating ? (
+                    <>
+                      <div className="animate-spin rounded-full h-3 w-3 border-b-2 border-white mr-1"></div>
+                      Generating...
+                    </>
+                  ) : (
+                    <>
+                      <span className="mr-1">🎯</span>
+                      Generate Slides
+                    </>
+                  )}
                 </button>
-                <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded">
-                  Slide {currentSlideNumber}
-                </span>
-                <button
-                  onClick={() => changeSlide(currentSlideNumber + 1)}
-                  className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
-                >
-                  Next →
-                </button>
-              </div>
-            </div>
-
-            {/* Slide Content */}
-            {currentSlide && (
-              <div className="bg-white rounded-lg shadow-md overflow-hidden">
-                <img 
-                  src={currentSlide.image_url} 
-                  alt={currentSlide.title}
-                  className="w-full h-64 object-cover"
-                />
-                <div className="p-6">
-                  <h3 className="text-xl font-semibold text-gray-900 mb-2">
-                    {currentSlide.title}
-                  </h3>
-                  <p className="text-gray-700 leading-relaxed">
-                    {currentSlide.content}
-                  </p>
+                
+                {/* Slide Navigation */}
+                <div className="border-l border-gray-300 pl-2 ml-2">
+                  <button
+                    onClick={() => changeSlide(Math.max(1, currentSlideNumber - 1))}
+                    disabled={currentSlideNumber <= 1}
+                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50"
+                  >
+                    ← Prev
+                  </button>
+                  <span className="px-3 py-1 bg-blue-100 text-blue-800 rounded mx-1">
+                    Slide {currentSlideNumber}
+                  </span>
+                  <button
+                    onClick={() => changeSlide(currentSlideNumber + 1)}
+                    className="px-3 py-1 bg-gray-200 text-gray-700 rounded hover:bg-gray-300"
+                  >
+                    Next →
+                  </button>
                 </div>
               </div>
-            )}
+            </div>
+            
+            <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-8 min-h-[400px]">
+              {currentSlide ? (
+                <div className="text-center">
+                  <img 
+                    src={currentSlide.image_url} 
+                    alt={currentSlide.title}
+                    className="w-full max-w-2xl mx-auto rounded-lg shadow-md mb-4"
+                  />
+                  <p className="text-gray-700 text-lg">{currentSlide.content}</p>
+                </div>
+              ) : (
+                <div className="flex items-center justify-center h-full">
+                  <p className="text-gray-600 text-lg">Loading slide...</p>
+                </div>
+              )}
+            </div>
           </div>
 
-          {/* References Sidebar */}
-          <div className="space-y-6">
-            {/* References */}
-            <div>
-              <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-                <span className="mr-2">🔗</span>
-                References
-              </h3>
-              <div className="space-y-3">
+          {/* Video Section - Takes 1/3 of space on large screens */}
+          <div className="lg:col-span-1">
+            <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+              <span className="mr-2">🎥</span>
+              Live Video Stream
+            </h2>
+            <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-6 min-h-[400px] flex items-center justify-center">
+              <div className="text-center">
+                <div className="w-16 h-16 bg-red-500 rounded-full mx-auto mb-4 flex items-center justify-center">
+                  <span className="text-white text-2xl">🔴</span>
+                </div>
+                <p className="text-gray-600">Live speaker video stream</p>
+                <p className="text-sm text-gray-500 mt-2">Coming soon...</p>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        {/* Bottom Section */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
+          {/* Reference Links */}
+          <div>
+            <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+              <span className="mr-2">📚</span>
+              Reference Links
+            </h2>
+            <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-6">
+              <ul className="space-y-3">
                 {references.map((ref, index) => (
-                  <div key={index} className="bg-white p-4 rounded-lg shadow-sm border border-gray-200">
+                  <li key={index}>
                     <a 
                       href={ref.url}
                       target="_blank"
                       rel="noopener noreferrer"
-                      className="text-blue-600 hover:text-blue-800 font-medium"
+                      className="text-blue-600 hover:text-blue-800 hover:underline transition-colors block"
                     >
-                      {ref.title}
+                      <span className="font-medium">{ref.title}</span>
+                      <p className="text-sm text-gray-600 mt-1">{ref.description}</p>
                     </a>
-                    <p className="text-gray-600 text-sm mt-1">{ref.description}</p>
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ul>
             </div>
+          </div>
 
-            {/* Live Q&A */}
-            <div>
-              <h3 className="text-xl font-semibold text-gray-800 mb-4 flex items-center">
-                <span className="mr-2">💬</span>
-                Live Q&A
-              </h3>
-              <Conversation />
-            </div>
+          {/* Conversation Component */}
+          <div>
+            <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+              <span className="mr-2">💬</span>
+              Live Q&A
+            </h2>
+            <Conversation />
           </div>
         </div>
       </div>

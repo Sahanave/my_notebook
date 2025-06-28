@@ -1,16 +1,40 @@
 "use client";
 
-import React, { useState } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { DocumentSummary } from '@/types/api';
+import { ApiClient } from '@/lib/api';
 
-interface DocumentSummaryProps {
-  summary: DocumentSummary | null;
-  loading?: boolean;
-  error?: string | null;
+export interface DocumentSummaryRef {
+  refreshSummary: () => Promise<void>;
 }
 
-export default function DocumentSummaryComponent({ summary, loading = false, error = null }: DocumentSummaryProps) {
+const DocumentSummaryComponent = forwardRef<DocumentSummaryRef>((props, ref) => {
+  const [summary, setSummary] = useState<DocumentSummary | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
   const [expandedSection, setExpandedSection] = useState<string | null>(null);
+
+  useEffect(() => {
+    loadSummary();
+  }, []);
+
+  // Expose refresh function to parent component
+  useImperativeHandle(ref, () => ({
+    refreshSummary: loadSummary
+  }));
+
+  const loadSummary = async () => {
+    try {
+      setLoading(true);
+      const documentSummary = await ApiClient.getDocumentSummary();
+      setSummary(documentSummary);
+    } catch (err) {
+      setError('Failed to load document summary');
+      console.error('Error loading document summary:', err);
+    } finally {
+      setLoading(false);
+    }
+  };
 
   const getDifficultyColor = (level: string) => {
     switch (level) {
@@ -60,9 +84,13 @@ export default function DocumentSummaryComponent({ summary, loading = false, err
     return (
       <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-6">
         <div className="text-center">
-          <p className="text-gray-600 mb-2">
-            {error || 'No document uploaded yet. Upload a PDF to see its AI-generated summary here.'}
-          </p>
+          <p className="text-red-600 mb-4">{error || 'No summary available'}</p>
+          <button 
+            onClick={loadSummary}
+            className="text-sm text-blue-600 hover:text-blue-800 underline"
+          >
+            Try again
+          </button>
         </div>
       </div>
     );
@@ -155,4 +183,8 @@ export default function DocumentSummaryComponent({ summary, loading = false, err
       </div>
     </div>
   );
-} 
+});
+
+DocumentSummaryComponent.displayName = 'DocumentSummaryComponent';
+
+export default DocumentSummaryComponent; 

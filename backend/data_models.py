@@ -1,6 +1,6 @@
 # Data models
 from pydantic import BaseModel
-from typing import List
+from typing import List, Optional
 
 class ReferenceLink(BaseModel):
     title: str
@@ -25,6 +25,30 @@ class ConversationMessage(BaseModel):
     timestamp: str
     type: str  # "question", "answer", "comment"
 
+
+class SectionMultimodalEnhancement(BaseModel):
+    summary: Optional[str] = None
+    questions: Optional[List[str]] = []
+    audio_explanation_url: Optional[str] = None
+    image_visualizations: Optional[List[str]] = []  # e.g. diagram URLs or Base64
+    
+class ResearchPaperSection(BaseModel):
+    title: str
+    abstract: Optional[str] = None
+    introduction: Optional[str] = None
+    methods: Optional[str] = None
+    results: Optional[str] = None
+    conclusion: Optional[str] = None
+    figures: Optional[List[str]] = []
+    references: Optional[List[str]] = []
+    rest: Optional[str] = None
+
+    # New: section-wise enrichment
+    introduction_enhanced: Optional[SectionMultimodalEnhancement] = None
+    methods_enhanced: Optional[SectionMultimodalEnhancement] = None
+    results_enhanced: Optional[SectionMultimodalEnhancement] = None
+    conclusion_enhanced: Optional[SectionMultimodalEnhancement] = None
+
 class DocumentSummary(BaseModel):
     title: str
     abstract: str
@@ -35,6 +59,8 @@ class DocumentSummary(BaseModel):
     document_type: str  # "research_paper", "tutorial", "book_chapter", "article"
     authors: List[str]
     publication_date: str
+    sections: Optional[ResearchPaperSection] = None
+
 
 class UploadResult(BaseModel):
     success: bool

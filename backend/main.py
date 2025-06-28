@@ -10,7 +10,7 @@ import tempfile
 from datetime import datetime
 from openai import OpenAI
 from data_models import SlideContent, ReferenceLink, ConversationMessage, LiveUpdate, DocumentSummary, UploadResult
-from parsing_info_from_pdfs import upload_single_pdf, generate_summary, create_vector_store
+from parsing_info_from_pdfs import upload_single_pdf, generate_summary, create_vector_store, generate_slides_from_content, generate_qa_pairs_from_document, generate_slides_from_qa_pairs
 from dotenv import load_dotenv
 
 load_dotenv()
@@ -22,6 +22,7 @@ app = FastAPI(title="Are You Taking Notes API", version="1.0.0")
 openai_client = None
 vector_store_id = None
 current_document_summary = None  # Store the latest generated summary
+current_qa_pairs = []  # Store the latest generated Q&A pairs
 
 try:
     openai_client = OpenAI()  # Will use OPENAI_API_KEY from environment
@@ -201,6 +202,137 @@ async def get_document_summary():
         return current_document_summary
     return sample_document_summary
 
+@app.post("/api/generate-qa", response_model=List[dict])
+async def generate_qa_pairs(use_current_document: bool = True):
+    """Generate Q&A pairs from the currently uploaded document"""
+    global current_document_summary, vector_store_id, current_qa_pairs
+    
+    if not openai_client:
+        raise HTTPException(status_code=500, detail="OpenAI client not configured")
+    
+    if not current_document_summary:
+        raise HTTPException(status_code=400, detail="No document summary available. Please upload a document first.")
+    
+    if not vector_store_id:
+        raise HTTPException(status_code=400, detail="No vector store available. Please upload a document first.")
+    
+    try:
+        # Generate Q&A pairs using the document summary and vector store
+        qa_pairs = generate_qa_pairs_from_document(
+            client=openai_client,
+            summary=current_document_summary,
+            vector_store_id=vector_store_id
+        )
+        
+        # Store for future use
+        current_qa_pairs = qa_pairs
+        
+        return qa_pairs
+        
+    except Exception as e:
+        print(f"Error generating Q&A pairs: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate Q&A pairs: {str(e)}")
+
+@app.get("/api/qa-pairs", response_model=List[dict])
+async def get_qa_pairs():
+    """Get the current Q&A pairs for the uploaded document"""
+    global current_qa_pairs
+    
+    if not current_qa_pairs:
+        return []
+    
+    return current_qa_pairs
+
+@app.post("/api/generate-slides", response_model=List[SlideContent])
+async def generate_slides_from_qa():
+    """Generate slides based on Q&A pairs from the uploaded document (auto-generates Q&A if needed)"""
+    global openai_client, current_document_summary, current_qa_pairs, vector_store_id
+    
+    print(f"🔄 Generate slides request received")
+    print(f"📊 Current state:")
+    print(f"   - OpenAI client: {'✅ Available' if openai_client else '❌ Not configured'}")
+    print(f"   - Document summary: {'✅ Available' if current_document_summary else '❌ None'}")
+    print(f"   - Q&A pairs: {'✅ Available' if current_qa_pairs else '❌ None'} ({len(current_qa_pairs) if current_qa_pairs else 0} pairs)")
+    print(f"   - Vector store: {'✅ Available' if vector_store_id else '❌ None'}")
+    
+    if not openai_client:
+        error_msg = "OpenAI client not configured. Please check OPENAI_API_KEY environment variable."
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=500, detail=error_msg)
+    
+    if not current_document_summary:
+        error_msg = "No document summary available. Please upload a PDF document first."
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    if not vector_store_id:
+        error_msg = "No vector store available. Please upload a PDF document first."
+        print(f"❌ {error_msg}")
+        raise HTTPException(status_code=400, detail=error_msg)
+    
+    try:
+        # Step 1: Generate Q&A pairs if they don't exist
+        if not current_qa_pairs:
+            print(f"🔄 No Q&A pairs found, generating them first...")
+            current_qa_pairs = generate_qa_pairs_from_document(
+                client=openai_client,
+                summary=current_document_summary,
+                vector_store_id=vector_store_id
+            )
+            print(f"✅ Generated {len(current_qa_pairs)} Q&A pairs")
+        else:
+            print(f"✅ Using existing {len(current_qa_pairs)} Q&A pairs")
+        
+        # Step 2: Generate slides using Q&A pairs
+        print(f"🎯 Generating slides from {len(current_qa_pairs)} Q&A pairs...")
+        print(f"📄 Document: {current_document_summary.title}")
+        
+        slides = generate_slides_from_qa_pairs(
+            client=openai_client,
+            qa_pairs=current_qa_pairs,
+            document_summary=current_document_summary
+        )
+        
+        print(f"✅ Generated {len(slides)} slides successfully")
+        
+        # Update the global sample_slides with generated content
+        global sample_slides
+        sample_slides = slides
+        
+        return slides
+        
+    except Exception as e:
+        error_msg = f"Failed to generate slides: {str(e)}"
+        print(f"❌ {error_msg}")
+        print(f"🔍 Error details: {type(e).__name__}: {e}")
+        raise HTTPException(status_code=500, detail=error_msg)
+
+@app.post("/api/generate-andrew-ng-slides", response_model=List[SlideContent])
+async def generate_andrew_ng_slides():
+    """Generate slides based on Andrew Ng's research paper reading methodology"""
+    global openai_client
+    
+    if not openai_client:
+        raise HTTPException(status_code=500, detail="OpenAI client not configured")
+    
+    try:
+        # Generate slides using Andrew Ng's methodology
+        slides = generate_slides_from_content(
+            client=openai_client,
+            content="",  # The content is already embedded in the function
+            title="How to Read Research Papers"
+        )
+        
+        # Update the global sample_slides with generated content
+        global sample_slides
+        sample_slides = slides
+        
+        return slides
+        
+    except Exception as e:
+        print(f"Error generating Andrew Ng slides: {e}")
+        raise HTTPException(status_code=500, detail=f"Failed to generate slides: {str(e)}")
+
 # Helper function to parse AI summary into DocumentSummary structure
 def parse_ai_summary_to_document_summary(ai_summary: str, filename: str) -> DocumentSummary:
     """Parse AI-generated summary text into DocumentSummary structure"""
@@ -357,7 +489,7 @@ def analyze_document_content(text: str, filename: str) -> dict:
 @app.post("/api/upload", response_model=UploadResult)
 async def upload_pdf(file: UploadFile = File(...)):
     """Process uploaded PDF and extract content for presentation generation"""
-    global current_document_summary
+    global current_document_summary, vector_store_id
     
     # Validate file type
     if not file.content_type == "application/pdf":
@@ -381,10 +513,36 @@ async def upload_pdf(file: UploadFile = File(...)):
         with open(temp_pdf_path, 'wb') as temp_file:
             temp_file.write(file_contents)
         
-        # Call the summary function (handles all AI processing)
+        # Create vector store and upload PDF for Q&A functionality
         if openai_client:
+            print(f"🔄 Creating vector store for: {file.filename}")
+            
+            # Create a new vector store for this document
+            store_name = f"document_store_{file.filename.replace('.pdf', '')}_{int(time.time())}"
+            vector_store_details = create_vector_store(openai_client, store_name)
+            
+            if vector_store_details and 'id' in vector_store_details:
+                vector_store_id = vector_store_details['id']
+                print(f"✅ Vector store created: {vector_store_id}")
+                
+                # Upload PDF to vector store
+                print(f"🔄 Uploading PDF to vector store...")
+                upload_result = upload_single_pdf(openai_client, temp_pdf_path, vector_store_id)
+                
+                if upload_result['status'] == 'success':
+                    print(f"✅ PDF uploaded to vector store successfully")
+                else:
+                    print(f"⚠️ PDF upload to vector store failed: {upload_result.get('error', 'Unknown error')}")
+            else:
+                print(f"⚠️ Failed to create vector store")
+                vector_store_id = None
+            
+            # Generate AI summary
             current_document_summary = generate_summary(openai_client, temp_pdf_path)
             print(f"✅ AI summary generated for: {file.filename}")
+        else:
+            print(f"⚠️ OpenAI client not available, skipping vector store creation")
+            vector_store_id = None
         
         # Basic analysis for response
         extracted_text, page_count = extract_text_from_pdf(file_contents)
@@ -398,7 +556,7 @@ async def upload_pdf(file: UploadFile = File(...)):
         # Return simple result
         result = UploadResult(
             success=True,
-            message=f"Successfully processed '{file.filename}' with AI analysis",
+            message=f"Successfully processed '{file.filename}' with AI analysis and vector store creation",
             filename=file.filename,
             fileSize=f"{file_size_mb:.2f} MB",
             pages=page_count,
@@ -414,6 +572,9 @@ async def upload_pdf(file: UploadFile = File(...)):
         )
         
         print(f"📄 PDF Processed: {file.filename} ({file_size_mb:.2f}MB) in {processing_time}s")
+        if vector_store_id:
+            print(f"🗃️ Vector store ready for Q&A: {vector_store_id}")
+        
         return result
         
     except Exception as e:
