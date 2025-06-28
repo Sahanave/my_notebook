@@ -24,7 +24,7 @@ export default function Home() {
         {/* Header */}
         <div className="mb-8">
           <h1 className="text-4xl font-bold text-gray-900 mb-2">
-            Building Agents with Claude on Vertex AI
+            Are you taking Notes
           </h1>
         </div>
 

@@ -2,7 +2,7 @@ import type { Metadata } from "next";
 import "./globals.css";
 
 export const metadata: Metadata = {
-  title: "Building Agents with Claude on Vertex AI",
+  title: "Are you taking Notes",
   description: "Interactive presentation on Claude Agents with Vertex AI",
 };
 
