@@ -11,6 +11,9 @@ from datetime import datetime
 from openai import OpenAI
 from data_models import SlideContent, ReferenceLink, ConversationMessage, LiveUpdate, DocumentSummary, UploadResult
 from parsing_info_from_pdfs import upload_single_pdf, generate_summary, create_vector_store
+from dotenv import load_dotenv
+
+load_dotenv()
 
 app = FastAPI(title="Are You Taking Notes API", version="1.0.0")
 
@@ -354,7 +357,7 @@ def analyze_document_content(text: str, filename: str) -> dict:
 @app.post("/api/upload", response_model=UploadResult)
 async def upload_pdf(file: UploadFile = File(...)):
     """Process uploaded PDF and extract content for presentation generation"""
-    global current_document_summary, vector_store_id
+    global current_document_summary
     
     # Validate file type
     if not file.content_type == "application/pdf":
@@ -371,63 +374,31 @@ async def upload_pdf(file: UploadFile = File(...)):
     start_time = time.time()
     
     try:
-        # Extract text from PDF for basic analysis
-        extracted_text, page_count = extract_text_from_pdf(file_contents)
+        # Save PDF file locally
+        temp_dir = tempfile.mkdtemp()
+        temp_pdf_path = os.path.join(temp_dir, file.filename)
         
-        # Analyze content for basic metrics
-        analysis = analyze_document_content(extracted_text, file.filename)
+        with open(temp_pdf_path, 'wb') as temp_file:
+            temp_file.write(file_contents)
         
-        # AI-powered processing if OpenAI client is available
-        ai_processing_status = "not_available"
+        # Call the summary function (handles all AI processing)
         if openai_client:
-            try:
-                # Save PDF temporarily for OpenAI processing
-                temp_dir = tempfile.mkdtemp()
-                temp_pdf_path = os.path.join(temp_dir, file.filename)
-                
-                with open(temp_pdf_path, 'wb') as temp_file:
-                    temp_file.write(file_contents)
-                
-                # Create vector store if not exists
-                if not vector_store_id:
-                    store_info = create_vector_store(openai_client, "document_analysis_store")
-                    if store_info:
-                        vector_store_id = store_info.get("id")
-                        print(f"✅ Created vector store: {vector_store_id}")
-                
-                # Upload PDF to OpenAI vector store
-                if vector_store_id:
-                    upload_result = upload_single_pdf(openai_client, temp_pdf_path, vector_store_id)
-                    print(f"📤 Upload to vector store: {upload_result}")
-                
-                # Generate AI-powered summary (returns DocumentSummary object)
-                ai_summary = generate_summary(openai_client, temp_pdf_path)
-                
-                # Store the AI-generated DocumentSummary
-                current_document_summary = ai_summary
-                ai_processing_status = "success"
-                print("✅ AI-generated DocumentSummary created and stored successfully")
-                print(f"📋 Summary: {ai_summary.title}")
-                print(f"🎯 Topics: {', '.join(ai_summary.main_topics[:3])}...")
-                print(f"📊 Difficulty: {ai_summary.difficulty_level}")
-                
-                # Clean up temporary file
-                os.remove(temp_pdf_path)
-                os.rmdir(temp_dir)
-                
-            except Exception as ai_error:
-                print(f"⚠️  AI processing failed: {ai_error}")
-                ai_processing_status = f"failed: {str(ai_error)}"
+            current_document_summary = generate_summary(openai_client, temp_pdf_path)
+            print(f"✅ AI summary generated for: {file.filename}")
         
+        # Basic analysis for response
+        extracted_text, page_count = extract_text_from_pdf(file_contents)
+        analysis = analyze_document_content(extracted_text, file.filename)
         processing_time = round(time.time() - start_time, 2)
         
-        # Create result with AI processing status
+        # Clean up temporary file
+        os.remove(temp_pdf_path)
+        os.rmdir(temp_dir)
+        
+        # Return simple result
         result = UploadResult(
             success=True,
-            message=f"Successfully processed '{file.filename}'" + (
-                f" with AI analysis" if ai_processing_status == "success" 
-                else f" (AI processing: {ai_processing_status})"
-            ),
+            message=f"Successfully processed '{file.filename}' with AI analysis",
             filename=file.filename,
             fileSize=f"{file_size_mb:.2f} MB",
             pages=page_count,
@@ -437,16 +408,12 @@ async def upload_pdf(file: UploadFile = File(...)):
             keyTopics=analysis["detected_topics"],
             extractedSections=analysis["sections"],
             generatedSlides=analysis["estimated_slides"],
-            detectedLanguage="English",  # Could add language detection
+            detectedLanguage="English",
             complexity=analysis["complexity"],
             extractedText=extracted_text[:1000] + "..." if len(extracted_text) > 1000 else extracted_text
         )
         
-        print(f"📄 PDF Processed: {file.filename} ({file_size_mb:.2f}MB)")
-        print(f"📊 Analysis: {page_count} pages, {len(analysis['detected_topics'])} topics")
-        print(f"🤖 AI Processing: {ai_processing_status}")
-        print(f"⏱️  Total processing time: {processing_time}s")
-        
+        print(f"📄 PDF Processed: {file.filename} ({file_size_mb:.2f}MB) in {processing_time}s")
         return result
         
     except Exception as e:

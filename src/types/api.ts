@@ -43,16 +43,9 @@ export interface UploadResult {
   filename: string;
   fileSize: string;
   pages: number;
-  readingTime: string;
-  topics: number;
   processingTime: string;
-  keyTopics: string[];
-  extractedSections: {
-    title: string;
-    pages: string;
-  }[];
-  generatedSlides: number;
   detectedLanguage: string;
   complexity: string;
-  extractedText: string; // Full text content from Python backend
+  extractedText: string;
+  documentSummary: DocumentSummary;
 } 
