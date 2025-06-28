@@ -5,6 +5,7 @@ import { SlideContent, ReferenceLink, LiveUpdate } from "@/types/api";
 import { ApiClient } from "@/lib/api";
 import Conversation from "@/components/Conversation";
 import DocumentSummaryComponent from "@/components/DocumentSummary";
+import DocumentUpload from "@/components/DocumentUpload";
 
 export default function Home() {
   const [currentSlide, setCurrentSlide] = useState<SlideContent | null>(null);
@@ -101,6 +102,22 @@ export default function Home() {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Document Upload Section */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+            <span className="mr-2">📤</span>
+            Upload Document
+          </h2>
+          <DocumentUpload onUploadComplete={(result) => {
+            console.log('Upload completed:', result);
+            // TODO: In future implementation, this could:
+            // - Refresh the slides based on uploaded document
+            // - Update document summary with real content  
+            // - Trigger content analysis and presentation generation
+            // - Update all sections with analyzed content
+          }} />
         </div>
 
         {/* Document Summary Section */}

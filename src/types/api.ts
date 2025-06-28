@@ -35,4 +35,23 @@ export interface DocumentSummary {
   document_type: "research_paper" | "tutorial" | "book_chapter" | "article";
   authors: string[];
   publication_date: string;
+}
+
+export interface UploadResult {
+  success: boolean;
+  message: string;
+  filename: string;
+  fileSize: string;
+  pages: number;
+  readingTime: string;
+  topics: number;
+  processingTime: string;
+  keyTopics: string[];
+  extractedSections: {
+    title: string;
+    pages: string;
+  }[];
+  generatedSlides: number;
+  detectedLanguage: string;
+  complexity: string;
 } 
