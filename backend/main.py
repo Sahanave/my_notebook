@@ -39,6 +39,17 @@ class ConversationMessage(BaseModel):
     timestamp: str
     type: str  # "question", "answer", "comment"
 
+class DocumentSummary(BaseModel):
+    title: str
+    abstract: str
+    key_points: List[str]
+    main_topics: List[str]
+    difficulty_level: str  # "beginner", "intermediate", "advanced"
+    estimated_read_time: str
+    document_type: str  # "research_paper", "tutorial", "book_chapter", "article"
+    authors: List[str]
+    publication_date: str
+
 # Sample data (placeholder content)
 sample_slides = [
     SlideContent(
@@ -116,6 +127,31 @@ sample_live_updates = [
     )
 ]
 
+sample_document_summary = DocumentSummary(
+    title="Building Intelligent Agents with Claude on Vertex AI",
+    abstract="This comprehensive guide explores the integration of Anthropic's Claude language model with Google Cloud's Vertex AI platform to create powerful, context-aware intelligent agents. The document covers the Model Context Protocol (MCP), implementation strategies, and best practices for deploying Claude-based agents in production environments.",
+    key_points=[
+        "Integration of Claude with Vertex AI infrastructure",
+        "Implementation of Model Context Protocol (MCP) for enhanced context management",
+        "Authentication and security considerations for production deployments",
+        "Scalability patterns and performance optimization techniques",
+        "Real-world use cases and deployment scenarios"
+    ],
+    main_topics=[
+        "Claude API Integration",
+        "Vertex AI Platform",
+        "Model Context Protocol",
+        "Authentication & Security",
+        "Performance Optimization",
+        "Production Deployment"
+    ],
+    difficulty_level="intermediate",
+    estimated_read_time="45 minutes",
+    document_type="tutorial",
+    authors=["Google Cloud Team", "Anthropic Documentation"],
+    publication_date="2024-12-28"
+)
+
 # API Endpoints
 @app.get("/")
 async def root():
@@ -166,6 +202,11 @@ async def add_message(message: str, user: str = "Anonymous"):
 async def get_live_updates():
     """Get live updates and announcements"""
     return sample_live_updates
+
+@app.get("/api/document-summary", response_model=DocumentSummary)
+async def get_document_summary():
+    """Get summary of the document being discussed"""
+    return sample_document_summary
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 

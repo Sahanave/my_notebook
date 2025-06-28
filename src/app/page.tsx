@@ -4,6 +4,7 @@ import React, { useState, useEffect } from "react";
 import { SlideContent, ReferenceLink, LiveUpdate } from "@/types/api";
 import { ApiClient } from "@/lib/api";
 import Conversation from "@/components/Conversation";
+import DocumentSummaryComponent from "@/components/DocumentSummary";
 
 export default function Home() {
   const [currentSlide, setCurrentSlide] = useState<SlideContent | null>(null);
@@ -100,6 +101,15 @@ export default function Home() {
               ))}
             </div>
           )}
+        </div>
+
+        {/* Document Summary Section */}
+        <div className="mb-8">
+          <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
+            <span className="mr-2">📄</span>
+            Document Summary
+          </h2>
+          <DocumentSummaryComponent />
         </div>
 
         {/* Main Content Area */}

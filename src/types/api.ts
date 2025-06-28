@@ -23,4 +23,16 @@ export interface ConversationMessage {
   message: string;
   timestamp: string;
   type: "question" | "answer" | "comment";
+}
+
+export interface DocumentSummary {
+  title: string;
+  abstract: string;
+  key_points: string[];
+  main_topics: string[];
+  difficulty_level: "beginner" | "intermediate" | "advanced";
+  estimated_read_time: string;
+  document_type: "research_paper" | "tutorial" | "book_chapter" | "article";
+  authors: string[];
+  publication_date: string;
 } 

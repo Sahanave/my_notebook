@@ -1,4 +1,4 @@
-import { ReferenceLink, SlideContent, LiveUpdate, ConversationMessage } from '@/types/api';
+import { ReferenceLink, SlideContent, LiveUpdate, ConversationMessage, DocumentSummary } from '@/types/api';
 
 const API_BASE_URL = process.env.NEXT_PUBLIC_API_URL || 'http://localhost:8000';
 
@@ -44,5 +44,9 @@ export class ApiClient {
 
   static async getLiveUpdates(): Promise<LiveUpdate[]> {
     return this.request<LiveUpdate[]>('/api/live-updates');
+  }
+
+  static async getDocumentSummary(): Promise<DocumentSummary> {
+    return this.request<DocumentSummary>('/api/document-summary');
   }
 } 
