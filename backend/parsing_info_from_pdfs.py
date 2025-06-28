@@ -333,13 +333,41 @@ def get_answer_using_file_search(client, question: str, vector_store_id: str, ma
             tool_choice="required"  # Force file_search usage
         )
         
-        if response.output and len(response.output) > 0:
-            return response.output[0].content[0].text
-        else:
-            return "I couldn't find a specific answer to this question in the document."
+        print(f"🔍 Response structure: {type(response)}")
+        print(f"🔍 Response attributes: {dir(response)}")
+        
+        # Try different ways to access the response content
+        if hasattr(response, 'output') and response.output and len(response.output) > 0:
+            output = response.output[0]
+            print(f"🔍 Output type: {type(output)}")
+            print(f"🔍 Output attributes: {dir(output)}")
+            
+            # Try accessing content in different ways
+            if hasattr(output, 'content') and output.content and len(output.content) > 0:
+                content = output.content[0]
+                if hasattr(content, 'text'):
+                    return content.text
+                elif hasattr(content, 'content'):
+                    return str(content.content)
+                else:
+                    return str(content)
+            elif hasattr(output, 'text'):
+                return output.text
+            elif hasattr(output, 'message'):
+                if hasattr(output.message, 'content'):
+                    return output.message.content
+                else:
+                    return str(output.message)
+            else:
+                return str(output)
+        
+        # If we can't parse the response, return a default message
+        print(f"🔍 Full response: {response}")
+        return "I found information related to your question in the document, but couldn't extract the specific details."
     
     except Exception as e:
         print(f"Error getting answer for question '{question}': {e}")
+        print(f"🔍 Error type: {type(e)}")
         return "Unable to retrieve answer due to an error."
 
 def generate_qa_pairs_from_document(client, summary: DocumentSummary, vector_store_id: str) -> List[dict]:
