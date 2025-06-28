@@ -7,18 +7,21 @@ import DocumentSummaryComponent, { DocumentSummaryRef } from "@/components/Docum
 import DocumentUpload from "@/components/DocumentUpload";
 
 export default function Home() {
-  const [currentSlide, setCurrentSlide] = useState<SlideContent | null>(null);
-  const [liveUpdates, setLiveUpdates] = useState<LiveUpdate[]>([]);
+  const [slides, setSlides] = useState<SlideContent[]>([]);
   const [currentSlideNumber, setCurrentSlideNumber] = useState(1);
   const [totalSlides, setTotalSlides] = useState(0);
+  const [liveUpdates, setLiveUpdates] = useState<LiveUpdate[]>([]);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
-  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
-  const [slideGenerating, setSlideGenerating] = useState(false);
   const [isNarrating, setIsNarrating] = useState(false);
+  const [slideGenerating, setSlideGenerating] = useState(false);
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   
-  // Ref to access DocumentSummary refresh function
-  const documentSummaryRef = useRef<DocumentSummaryRef>(null);
+  // Refs
+  const documentSummaryRef = useRef<{ refreshSummary: () => Promise<void> }>(null);
+  const currentAudioRef = useRef<HTMLAudioElement | null>(null);
+
+  const currentSlide = slides.find(slide => slide.slide_number === currentSlideNumber);
 
   useEffect(() => {
     loadInitialData();
@@ -27,110 +30,133 @@ export default function Home() {
   const loadInitialData = async () => {
     try {
       setLoading(true);
-      const [metadata, updates] = await Promise.all([
-        ApiClient.getSlidesMetadata(),
-        ApiClient.getLiveUpdates()
-      ]);
       
-      setTotalSlides(metadata.total_slides);
+      // Load all slides at once
+      const slideData = await ApiClient.getSlides();
+      setSlides(slideData);
+      setTotalSlides(slideData.length);
       
-      // Only load first slide if slides are available
-      if (metadata.total_slides > 0) {
-        const slide = await ApiClient.getSlide(1);
-        setCurrentSlide(slide);
+      if (slideData.length > 0) {
+        setCurrentSlideNumber(1);
       }
       
+      // Load live updates
+      const updates = await ApiClient.getLiveUpdates();
       setLiveUpdates(updates);
+      
     } catch (err) {
-      setError("Failed to load content");
-      console.error("Error loading data:", err);
+      console.error('Failed to load initial data:', err);
+      setError('Failed to load presentation data');
     } finally {
       setLoading(false);
     }
   };
 
   const generateSlides = async () => {
+    setSlideGenerating(true);
     try {
-      setSlideGenerating(true);
-      console.log('🔄 Generating slides (including Q&A processing)...');
+      console.log('🎯 Generating slides from Q&A pairs...');
       
-      const newSlides = await ApiClient.generateSlides();
-      console.log('✅ Slides generated successfully:', newSlides);
+      // Call the FastAPI backend to generate slides
+      const generatedSlides = await ApiClient.generateSlides();
+      console.log('✅ Generated slides:', generatedSlides);
       
-      // Wait a moment for backend to update, then refresh slides metadata
-      await new Promise(resolve => setTimeout(resolve, 500));
+      // Update slides and navigation
+      setSlides(generatedSlides);
+      setTotalSlides(generatedSlides.length);
       
-      // Get updated slides metadata from backend
-      const metadata = await ApiClient.getSlidesMetadata();
-      console.log('📊 Updated slides metadata:', metadata);
-      
-      // Update total slides count and load first slide from backend
-      setTotalSlides(metadata.total_slides);
-      
-      if (metadata.total_slides > 0) {
-        // Fetch the first slide from the updated backend
-        const firstSlide = await ApiClient.getSlide(1);
-        setCurrentSlide(firstSlide);
+      if (generatedSlides.length > 0) {
         setCurrentSlideNumber(1);
-        console.log('📄 Loaded first slide:', firstSlide);
       }
       
-      // Show success message
-      setLiveUpdates(prev => [{
-        message: `Generated ${metadata.total_slides} slides from your document content!`,
-        timestamp: new Date().toISOString(),
-        type: "info"
-      }, ...prev]);
-      
+      console.log('🎉 Slides updated successfully!');
     } catch (err) {
-      console.error('❌ Error generating slides:', err);
-      setError("Failed to generate slides. Please try again.");
+      console.error('❌ Failed to generate slides:', err);
+      setError(`Failed to generate slides: ${err instanceof Error ? err.message : 'Unknown error'}`);
     } finally {
       setSlideGenerating(false);
     }
   };
 
   const changeSlide = async (slideNumber: number) => {
-    // Check bounds before attempting to load
-    if (slideNumber < 1 || slideNumber > totalSlides) {
-      return;
-    }
-    
-    try {
-      const slide = await ApiClient.getSlide(slideNumber);
-      setCurrentSlide(slide);
+    // Check if slide exists in our loaded slides
+    const slide = slides.find(s => s.slide_number === slideNumber);
+    if (slide) {
       setCurrentSlideNumber(slideNumber);
-    } catch (err) {
-      console.error("Error loading slide:", err);
-      // If slide doesn't exist, stay on current slide
+    } else if (slideNumber >= 1 && slideNumber <= totalSlides) {
+      // If slide exists but not loaded, load all slides again
+      try {
+        const allSlides = await ApiClient.getSlides();
+        setSlides(allSlides);
+        setCurrentSlideNumber(slideNumber);
+      } catch (err) {
+        console.error('Failed to load slide:', err);
+      }
     }
+    // If slide doesn't exist, stay on current slide
   };
 
   const playSlideNarration = async (slideNumber: number) => {
     setIsNarrating(true);
     try {
+      // Call the backend to get the MP3 audio file
       const response = await fetch(`/api/slides/${slideNumber}`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ action: 'generate_voice' })
       });
       
-      const data = await response.json();
+      if (!response.ok) {
+        throw new Error('Failed to generate audio');
+      }
       
-      if (data.narration_text) {
-        // For now, just speak the text using browser's speech synthesis
-        // When backend is connected, this will play the actual audio file
-        if ('speechSynthesis' in window) {
-          const utterance = new SpeechSynthesisUtterance(data.narration_text);
-          utterance.rate = 0.9;
-          utterance.pitch = 1.0;
-          utterance.volume = 0.8;
-          utterance.onend = () => setIsNarrating(false);
-          utterance.onerror = () => setIsNarrating(false);
-          speechSynthesis.speak(utterance);
-        } else {
-          console.log('Narration text:', data.narration_text);
+      // Check if we got an audio file or JSON response
+      const contentType = response.headers.get('content-type');
+      
+      if (contentType?.includes('audio/')) {
+        // We got an MP3 file, play it directly
+        const audioBlob = await response.blob();
+        const audioUrl = URL.createObjectURL(audioBlob);
+        
+        // Create and play audio
+        const audio = new Audio(audioUrl);
+        audio.volume = 0.8;
+        
+        audio.onended = () => {
           setIsNarrating(false);
+          URL.revokeObjectURL(audioUrl); // Clean up memory
+        };
+        
+        audio.onerror = () => {
+          console.error('Audio playback failed');
+          setIsNarrating(false);
+          URL.revokeObjectURL(audioUrl); // Clean up memory
+        };
+        
+        // Store audio reference for stopping
+        currentAudioRef.current = audio;
+        await audio.play();
+        
+      } else {
+        // We got a JSON response, check if it has narration text
+        const data = await response.json();
+        
+        if (data.narration_text) {
+          // Fallback to browser speech synthesis if no audio file
+          if ('speechSynthesis' in window) {
+            const utterance = new SpeechSynthesisUtterance(data.narration_text);
+            utterance.rate = 0.9;
+            utterance.pitch = 1.0;
+            utterance.volume = 0.8;
+            utterance.onend = () => setIsNarrating(false);
+            utterance.onerror = () => setIsNarrating(false);
+            speechSynthesis.speak(utterance);
+          } else {
+            console.log('Narration text:', data.narration_text);
+            setIsNarrating(false);
+          }
+        } else {
+          throw new Error('No audio or narration text available');
         }
       }
     } catch (error) {
@@ -140,9 +166,18 @@ export default function Home() {
   };
 
   const stopNarration = () => {
+    // Stop HTML5 audio if playing
+    if (currentAudioRef.current) {
+      currentAudioRef.current.pause();
+      currentAudioRef.current.currentTime = 0;
+      currentAudioRef.current = null;
+    }
+    
+    // Stop speech synthesis if playing
     if ('speechSynthesis' in window) {
       speechSynthesis.cancel();
     }
+    
     setIsNarrating(false);
   };
 

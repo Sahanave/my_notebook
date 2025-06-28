@@ -365,6 +365,7 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
         # Simple JSON parsing - let Python handle the escaping
         tool_call = response.choices[0].message.tool_calls[0]
         slides_data = json.loads(tool_call.function.arguments)
+        print(slides_data)
         
         # Convert to SlideContent objects
         slides = []

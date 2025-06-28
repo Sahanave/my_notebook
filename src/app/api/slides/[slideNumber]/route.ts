@@ -31,21 +31,26 @@ export async function GET(
   request: NextRequest,
   { params }: { params: { slideNumber: string } }
 ) {
-  const slideNumber = parseInt(params.slideNumber);
-  const slide = slides.find(s => s.slide_number === slideNumber);
-  
-  if (!slide) {
+  try {
+    const backendUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
+    const response = await fetch(`${backendUrl}/api/slides/${params.slideNumber}`);
+    
+    if (!response.ok) {
+      return NextResponse.json(
+        { error: `Slide ${params.slideNumber} not found` }, 
+        { status: 404 }
+      );
+    }
+    
+    const slide = await response.json();
+    return NextResponse.json(slide);
+  } catch (error) {
+    console.error('Error fetching slide from backend:', error);
     return NextResponse.json(
-      {
-        title: "Slide Not Found",
-        content: "The requested slide is not available",
-        image_url: "https://via.placeholder.com/800x600/6B7280/FFFFFF?text=Not+Found",
-        slide_number: slideNumber
-      }
+      { error: 'Failed to fetch slide' }, 
+      { status: 500 }
     );
   }
-  
-  return NextResponse.json(slide);
 }
 
 export async function POST(
@@ -53,30 +58,46 @@ export async function POST(
   { params }: { params: { slideNumber: string } }
 ) {
   try {
-    const { action } = await request.json();
-    const slideNumber = parseInt(params.slideNumber);
+    const body = await request.json();
+    const backendUrl = process.env.FASTAPI_URL || 'http://localhost:8000';
     
-    if (action === 'generate_voice') {
-      const slide = slides.find(s => s.slide_number === slideNumber);
-      
-      if (!slide) {
-        return NextResponse.json({ error: 'Slide not found' }, { status: 404 });
-      }
-
-      // Create narration text (title and content only)
-      const narrationText = `${slide.title}. ${slide.content}`;
-      
-      // For now, return the text. In production, this would call the backend TTS API
-      // When backend is deployed, replace this with actual API call
-      return NextResponse.json({ 
-        narration_text: narrationText,
-        audio_url: null, // Will be populated when backend is connected
-        message: 'Voice generation ready (backend needed for actual audio)'
+    if (body.action === 'generate_voice') {
+      // Generate audio for this slide
+      const response = await fetch(`${backendUrl}/api/slides/${params.slideNumber}/voice`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
       });
+      
+      if (!response.ok) {
+        throw new Error('Failed to generate audio');
+      }
+      
+      // Check if response is audio file or JSON
+      const contentType = response.headers.get('content-type');
+      if (contentType?.includes('audio/')) {
+        // Return audio file directly
+        const audioBuffer = await response.arrayBuffer();
+        return new NextResponse(audioBuffer, {
+          headers: {
+            'Content-Type': 'audio/mpeg',
+            'Content-Disposition': `inline; filename="slide-${params.slideNumber}.mp3"`,
+          },
+        });
+      } else {
+        // Return JSON response
+        const data = await response.json();
+        return NextResponse.json(data);
+      }
     }
     
-    return NextResponse.json({ error: 'Invalid action' }, { status: 400 });
+    return NextResponse.json({ error: 'Unknown action' }, { status: 400 });
   } catch (error) {
-    return NextResponse.json({ error: 'Failed to process request' }, { status: 500 });
+    console.error('Error processing slide request:', error);
+    return NextResponse.json(
+      { error: 'Failed to process request' }, 
+      { status: 500 }
+    );
   }
 } 
