@@ -1,10 +1,10 @@
 "use client";
 
-import React, { useState, useEffect } from "react";
+import React, { useState, useEffect, useRef } from "react";
 import { SlideContent, ReferenceLink, LiveUpdate } from "@/types/api";
 import { ApiClient } from "@/lib/api";
 import Conversation from "@/components/Conversation";
-import DocumentSummaryComponent from "@/components/DocumentSummary";
+import DocumentSummaryComponent, { DocumentSummaryRef } from "@/components/DocumentSummary";
 import DocumentUpload from "@/components/DocumentUpload";
 
 export default function Home() {
@@ -14,6 +14,10 @@ export default function Home() {
   const [currentSlideNumber, setCurrentSlideNumber] = useState(1);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [summaryRefreshing, setSummaryRefreshing] = useState(false);
+  
+  // Ref to access DocumentSummary refresh function
+  const documentSummaryRef = useRef<DocumentSummaryRef>(null);
 
   useEffect(() => {
     loadInitialData();
@@ -110,13 +114,23 @@ export default function Home() {
             <span className="mr-2">📤</span>
             Upload Document
           </h2>
-          <DocumentUpload onUploadComplete={(result) => {
+          <DocumentUpload onUploadComplete={async (result) => {
             console.log('Upload completed:', result);
-            // TODO: In future implementation, this could:
-            // - Refresh the slides based on uploaded document
-            // - Update document summary with real content  
-            // - Trigger content analysis and presentation generation
-            // - Update all sections with analyzed content
+            
+            // Refresh the document summary immediately after upload
+            try {
+              setSummaryRefreshing(true);
+              await documentSummaryRef.current?.refreshSummary();
+              console.log('✅ Document summary refreshed successfully');
+              
+              // Show success notification briefly
+              setTimeout(() => {
+                setSummaryRefreshing(false);
+              }, 1000);
+            } catch (error) {
+              console.error('❌ Failed to refresh document summary:', error);
+              setSummaryRefreshing(false);
+            }
           }} />
         </div>
 
@@ -125,8 +139,14 @@ export default function Home() {
           <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
             <span className="mr-2">📄</span>
             Document Summary
+            {summaryRefreshing && (
+              <span className="ml-2 text-sm text-blue-600 flex items-center">
+                <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600 mr-1"></div>
+                Updating...
+              </span>
+            )}
           </h2>
-          <DocumentSummaryComponent />
+          <DocumentSummaryComponent ref={documentSummaryRef} />
         </div>
 
         {/* Main Content Area */}

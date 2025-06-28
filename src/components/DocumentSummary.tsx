@@ -1,10 +1,14 @@
 "use client";
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, forwardRef, useImperativeHandle } from 'react';
 import { DocumentSummary } from '@/types/api';
 import { ApiClient } from '@/lib/api';
 
-export default function DocumentSummaryComponent() {
+export interface DocumentSummaryRef {
+  refreshSummary: () => Promise<void>;
+}
+
+const DocumentSummaryComponent = forwardRef<DocumentSummaryRef>((props, ref) => {
   const [summary, setSummary] = useState<DocumentSummary | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
@@ -13,6 +17,11 @@ export default function DocumentSummaryComponent() {
   useEffect(() => {
     loadSummary();
   }, []);
+
+  // Expose refresh function to parent component
+  useImperativeHandle(ref, () => ({
+    refreshSummary: loadSummary
+  }));
 
   const loadSummary = async () => {
     try {
@@ -174,4 +183,8 @@ export default function DocumentSummaryComponent() {
       </div>
     </div>
   );
-} 
+});
+
+DocumentSummaryComponent.displayName = 'DocumentSummaryComponent';
+
+export default DocumentSummaryComponent; 

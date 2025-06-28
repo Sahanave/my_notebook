@@ -1,14 +1,31 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from pydantic import BaseModel
 from typing import List
 import uvicorn
 import PyPDF2
 import io
 import time
+import os
+import tempfile
 from datetime import datetime
+from openai import OpenAI
+from data_models import SlideContent, ReferenceLink, ConversationMessage, LiveUpdate, DocumentSummary, UploadResult
+from parsing_info_from_pdfs import upload_single_pdf, generate_summary, create_vector_store
 
 app = FastAPI(title="Are You Taking Notes API", version="1.0.0")
+
+# Initialize OpenAI client
+# You'll need to set OPENAI_API_KEY environment variable
+openai_client = None
+vector_store_id = None
+current_document_summary = None  # Store the latest generated summary
+
+try:
+    openai_client = OpenAI()  # Will use OPENAI_API_KEY from environment
+    print("✅ OpenAI client initialized successfully")
+except Exception as e:
+    print(f"⚠️  OpenAI client not initialized: {e}")
+    print("Set OPENAI_API_KEY environment variable to enable AI features")
 
 # Enable CORS for Next.js frontend
 app.add_middleware(
@@ -19,56 +36,7 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Data models
-class ReferenceLink(BaseModel):
-    title: str
-    url: str
-    description: str
 
-class SlideContent(BaseModel):
-    title: str
-    content: str
-    image_url: str
-    slide_number: int
-
-class LiveUpdate(BaseModel):
-    message: str
-    timestamp: str
-    type: str  # "info", "question", "announcement"
-
-class ConversationMessage(BaseModel):
-    id: int
-    user: str
-    message: str
-    timestamp: str
-    type: str  # "question", "answer", "comment"
-
-class DocumentSummary(BaseModel):
-    title: str
-    abstract: str
-    key_points: List[str]
-    main_topics: List[str]
-    difficulty_level: str  # "beginner", "intermediate", "advanced"
-    estimated_read_time: str
-    document_type: str  # "research_paper", "tutorial", "book_chapter", "article"
-    authors: List[str]
-    publication_date: str
-
-class UploadResult(BaseModel):
-    success: bool
-    message: str
-    filename: str
-    fileSize: str
-    pages: int
-    readingTime: str
-    topics: int
-    processingTime: str
-    keyTopics: List[str]
-    extractedSections: List[dict]
-    generatedSlides: int
-    detectedLanguage: str
-    complexity: str
-    extractedText: str  # Full text content
 
 # Sample data (placeholder content)
 sample_slides = [
@@ -226,7 +194,90 @@ async def get_live_updates():
 @app.get("/api/document-summary", response_model=DocumentSummary)
 async def get_document_summary():
     """Get summary of the document being discussed"""
+    if current_document_summary:
+        return current_document_summary
     return sample_document_summary
+
+# Helper function to parse AI summary into DocumentSummary structure
+def parse_ai_summary_to_document_summary(ai_summary: str, filename: str) -> DocumentSummary:
+    """Parse AI-generated summary text into DocumentSummary structure"""
+    try:
+        # Simple parsing - in production you might want more sophisticated parsing
+        lines = ai_summary.split('\n')
+        
+        title = filename.replace('.pdf', '')
+        abstract = ""
+        key_points = []
+        main_topics = []
+        difficulty_level = "intermediate"
+        document_type = "article"
+        
+        # Extract information from AI summary
+        current_section = None
+        for line in lines:
+            line = line.strip()
+            if not line:
+                continue
+                
+            if "title:" in line.lower() or "document title:" in line.lower():
+                title = line.split(':', 1)[1].strip()
+            elif "abstract:" in line.lower() or "overview:" in line.lower():
+                abstract = line.split(':', 1)[1].strip()
+            elif "key points:" in line.lower():
+                current_section = "key_points"
+            elif "main topics:" in line.lower() or "topics:" in line.lower():
+                current_section = "main_topics"
+            elif "difficulty:" in line.lower():
+                level = line.split(':', 1)[1].strip().lower()
+                if level in ["beginner", "intermediate", "advanced"]:
+                    difficulty_level = level
+            elif "document type:" in line.lower() or "type:" in line.lower():
+                doc_type = line.split(':', 1)[1].strip().lower()
+                if doc_type in ["research_paper", "tutorial", "book_chapter", "article"]:
+                    document_type = doc_type
+            elif line.startswith('-') or line.startswith('•'):
+                content = line[1:].strip()
+                if current_section == "key_points":
+                    key_points.append(content)
+                elif current_section == "main_topics":
+                    main_topics.append(content)
+            elif not abstract and len(line) > 50:  # Likely the abstract if it's a long line
+                abstract = line
+        
+        # Fallback values if parsing didn't extract everything
+        if not abstract:
+            abstract = "Document summary generated from PDF content."
+        if not key_points:
+            key_points = ["Document analysis completed", "Content extracted and processed"]
+        if not main_topics:
+            main_topics = ["General content", "Document analysis"]
+            
+        return DocumentSummary(
+            title=title,
+            abstract=abstract,
+            key_points=key_points,
+            main_topics=main_topics,
+            difficulty_level=difficulty_level,
+            estimated_read_time="30 minutes",  # Could be calculated from word count
+            document_type=document_type,
+            authors=["Extracted from PDF"],
+            publication_date=datetime.now().strftime("%Y-%m-%d")
+        )
+        
+    except Exception as e:
+        print(f"Error parsing AI summary: {e}")
+        # Return a basic summary if parsing fails
+        return DocumentSummary(
+            title=filename.replace('.pdf', ''),
+            abstract="AI-generated summary of the uploaded document.",
+            key_points=["Document processed successfully", "Content analysis completed"],
+            main_topics=["Document content", "Analysis results"],
+            difficulty_level="intermediate",
+            estimated_read_time="30 minutes",
+            document_type="article",
+            authors=["Extracted from PDF"],
+            publication_date=datetime.now().strftime("%Y-%m-%d")
+        )
 
 # PDF Processing Functions
 def extract_text_from_pdf(file_contents: bytes) -> tuple[str, int]:
@@ -303,6 +354,7 @@ def analyze_document_content(text: str, filename: str) -> dict:
 @app.post("/api/upload", response_model=UploadResult)
 async def upload_pdf(file: UploadFile = File(...)):
     """Process uploaded PDF and extract content for presentation generation"""
+    global current_document_summary, vector_store_id
     
     # Validate file type
     if not file.content_type == "application/pdf":
@@ -319,18 +371,63 @@ async def upload_pdf(file: UploadFile = File(...)):
     start_time = time.time()
     
     try:
-        # Extract text from PDF
+        # Extract text from PDF for basic analysis
         extracted_text, page_count = extract_text_from_pdf(file_contents)
         
-        # Analyze content
+        # Analyze content for basic metrics
         analysis = analyze_document_content(extracted_text, file.filename)
+        
+        # AI-powered processing if OpenAI client is available
+        ai_processing_status = "not_available"
+        if openai_client:
+            try:
+                # Save PDF temporarily for OpenAI processing
+                temp_dir = tempfile.mkdtemp()
+                temp_pdf_path = os.path.join(temp_dir, file.filename)
+                
+                with open(temp_pdf_path, 'wb') as temp_file:
+                    temp_file.write(file_contents)
+                
+                # Create vector store if not exists
+                if not vector_store_id:
+                    store_info = create_vector_store(openai_client, "document_analysis_store")
+                    if store_info:
+                        vector_store_id = store_info.get("id")
+                        print(f"✅ Created vector store: {vector_store_id}")
+                
+                # Upload PDF to OpenAI vector store
+                if vector_store_id:
+                    upload_result = upload_single_pdf(openai_client, temp_pdf_path, vector_store_id)
+                    print(f"📤 Upload to vector store: {upload_result}")
+                
+                # Generate AI-powered summary (returns DocumentSummary object)
+                ai_summary = generate_summary(openai_client, temp_pdf_path)
+                
+                # Store the AI-generated DocumentSummary
+                current_document_summary = ai_summary
+                ai_processing_status = "success"
+                print("✅ AI-generated DocumentSummary created and stored successfully")
+                print(f"📋 Summary: {ai_summary.title}")
+                print(f"🎯 Topics: {', '.join(ai_summary.main_topics[:3])}...")
+                print(f"📊 Difficulty: {ai_summary.difficulty_level}")
+                
+                # Clean up temporary file
+                os.remove(temp_pdf_path)
+                os.rmdir(temp_dir)
+                
+            except Exception as ai_error:
+                print(f"⚠️  AI processing failed: {ai_error}")
+                ai_processing_status = f"failed: {str(ai_error)}"
         
         processing_time = round(time.time() - start_time, 2)
         
-        # Create result
+        # Create result with AI processing status
         result = UploadResult(
             success=True,
-            message=f"Successfully processed '{file.filename}'",
+            message=f"Successfully processed '{file.filename}'" + (
+                f" with AI analysis" if ai_processing_status == "success" 
+                else f" (AI processing: {ai_processing_status})"
+            ),
             filename=file.filename,
             fileSize=f"{file_size_mb:.2f} MB",
             pages=page_count,
@@ -347,7 +444,8 @@ async def upload_pdf(file: UploadFile = File(...)):
         
         print(f"📄 PDF Processed: {file.filename} ({file_size_mb:.2f}MB)")
         print(f"📊 Analysis: {page_count} pages, {len(analysis['detected_topics'])} topics")
-        print(f"⏱️  Processing time: {processing_time}s")
+        print(f"🤖 AI Processing: {ai_processing_status}")
+        print(f"⏱️  Total processing time: {processing_time}s")
         
         return result
         
