@@ -1,6 +1,6 @@
 from fastapi import FastAPI, File, UploadFile, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
-from typing import List
+from typing import List, Optional
 import uvicorn
 import PyPDF2
 import io
@@ -8,12 +8,12 @@ import time
 import os
 import tempfile
 from datetime import datetime
-import openai
 from openai import OpenAI
-from concurrent.futures import ThreadPoolExecutor
 from data_models import SlideContent, LiveUpdate, DocumentSummary, UploadResult
 from parsing_info_from_pdfs import upload_single_pdf, generate_summary, create_vector_store, generate_qa_pairs_from_document, generate_slides_from_qa_pairs
 from dotenv import load_dotenv
+from fastapi.responses import JSONResponse, StreamingResponse
+from io import BytesIO
 
 load_dotenv()
 
@@ -42,30 +42,11 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
-# Sample data (placeholder content)
-sample_slides = [
-    SlideContent(
-        title="Welcome to Are You Taking Notes",
-        content="• AI-powered document analysis and slide generation • Upload PDFs and get instant summaries • Generate educational presentations automatically",
-        image_description="Welcome screen with document upload icon and AI brain illustration",
-        speaker_notes="Welcome everyone to our AI-powered note-taking system. This tool helps you analyze documents and create presentations quickly.",
-        slide_number=1
-    ),
-    SlideContent(
-        title="How It Works",
-        content="• Upload your PDF document • AI analyzes and summarizes content • Generate Q&A pairs automatically • Create presentation slides",
-        image_description="Flowchart showing the 4-step process from upload to slides",
-        speaker_notes="The process is simple: upload a document, let AI analyze it, and get both summaries and presentation slides automatically generated.",
-        slide_number=2
-    ),
-    SlideContent(
-        title="Get Started",
-        content="• Click the upload area above • Select a PDF file (max 10MB) • Wait for AI processing • View your generated slides",
-        image_description="Screenshot of the upload interface with drag-and-drop area highlighted",
-        speaker_notes="Ready to try it? Simply upload a PDF using the interface above and watch the AI work its magic.",
-        slide_number=3
-    )
-]
+# Generated slides storage (starts empty, populated after document upload and slide generation)
+sample_slides = []
+
+# Audio storage for slides (maps slide_number to audio file path)
+slide_audio_cache = {}
 
 sample_live_updates = [
     LiveUpdate(
@@ -104,6 +85,56 @@ sample_document_summary = DocumentSummary(
     authors=["Google Cloud Team", "Anthropic Documentation"],
     publication_date="2024-12-28"
 )
+
+# Helper Functions
+async def generate_audio_for_all_slides(slides: List[SlideContent]) -> None:
+    """Generate audio files for all slides and cache them"""
+    global slide_audio_cache, openai_client
+    
+    if not openai_client:
+        print("⚠️ OpenAI client not available, skipping audio generation")
+        return
+    
+    print(f"🎙️ Generating audio for {len(slides)} slides...")
+    slide_audio_cache.clear()  # Clear previous audio cache
+    
+    try:
+        from voice_agent import SimpleVoiceAgent
+        voice_agent = SimpleVoiceAgent(openai_client)
+        
+        for slide in slides:
+            try:
+                # Generate narration text
+                narration_text = f"{slide.title}. {slide.content}"
+                
+                # Generate audio
+                audio_content = await voice_agent.generate_audio(narration_text)
+                
+                if audio_content:
+                    # Store audio in memory cache (in production, you might save to files)
+                    slide_audio_cache[slide.slide_number] = audio_content
+                    print(f"✅ Generated audio for slide {slide.slide_number}: {slide.title}")
+                else:
+                    print(f"⚠️ Failed to generate audio for slide {slide.slide_number}")
+                    
+            except Exception as e:
+                print(f"❌ Error generating audio for slide {slide.slide_number}: {e}")
+                
+        print(f"🎉 Audio generation complete! Generated audio for {len(slide_audio_cache)} slides")
+        
+    except Exception as e:
+        print(f"❌ Audio generation failed: {e}")
+
+def get_slide_audio(slide_number: int) -> Optional[bytes]:
+    """Get cached audio for a specific slide"""
+    return slide_audio_cache.get(slide_number)
+
+def clear_slide_cache():
+    """Clear all cached slides and audio"""
+    global sample_slides, slide_audio_cache
+    sample_slides.clear()
+    slide_audio_cache.clear()
+    print("🧹 Cleared slide and audio cache")
 
 # API Endpoints
 @app.get("/")
@@ -241,6 +272,9 @@ async def generate_slides_from_qa():
         # Update the global sample_slides with generated content
         global sample_slides
         sample_slides = slides
+        
+        # Step 3: Auto-generate audio for all slides
+        await generate_audio_for_all_slides(slides)
         
         return slides
         
@@ -497,6 +531,143 @@ async def upload_pdf(file: UploadFile = File(...)):
     except Exception as e:
         print(f"❌ PDF Processing Error: {str(e)}")
         raise HTTPException(status_code=500, detail=f"Failed to process PDF: {str(e)}")
+
+@app.post("/api/slides/{slide_number}/voice")
+async def generate_slide_narration(slide_number: int):
+    """Get voice narration for a specific slide (uses pre-generated audio if available)"""
+    try:
+        # First, try to get cached audio
+        cached_audio = get_slide_audio(slide_number)
+        
+        if cached_audio:
+            print(f"✅ Serving cached audio for slide {slide_number}")
+            audio_bytes = BytesIO(cached_audio)
+            return StreamingResponse(
+                audio_bytes,
+                media_type="audio/mpeg",
+                headers={"Content-Disposition": f"attachment; filename=slide_{slide_number}_narration.mp3"}
+            )
+        
+        # If no cached audio, generate on-demand
+        print(f"🔄 No cached audio found for slide {slide_number}, generating on-demand...")
+        
+        # Use the voice agent to get narration for the slide
+        from voice_agent import SimpleVoiceAgent
+        voice_agent = SimpleVoiceAgent(openai_client)
+        
+        # Get narration text for the specific slide
+        narration_text = voice_agent.get_slide_narration(slide_number)
+        
+        if narration_text == "Slide not found.":
+            raise HTTPException(status_code=404, detail="Slide not found")
+        
+        # Generate speech using the voice agent
+        audio_content = await voice_agent.generate_audio(narration_text)
+        
+        if not audio_content:
+            raise HTTPException(status_code=500, detail="Failed to generate audio content")
+        
+        # Cache the generated audio for future use
+        slide_audio_cache[slide_number] = audio_content
+        print(f"✅ Generated and cached audio for slide {slide_number}")
+        
+        # Convert to streaming response
+        audio_bytes = BytesIO(audio_content)
+        
+        return StreamingResponse(
+            audio_bytes,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": f"attachment; filename=slide_{slide_number}_narration.mp3"}
+        )
+        
+    except HTTPException:
+        raise
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Voice generation failed: {str(e)}")
+
+@app.post("/api/voice/custom")
+async def generate_custom_narration(request: dict):
+    """Generate voice narration for custom text"""
+    try:
+        text = request.get("text", "")
+        voice = request.get("voice", "alloy")  # Default voice
+        
+        if not text:
+            raise HTTPException(status_code=400, detail="Text is required")
+        
+        if len(text) > 4000:  # OpenAI TTS limit
+            raise HTTPException(status_code=400, detail="Text too long (max 4000 characters)")
+        
+        # Use the voice agent for consistency
+        from voice_agent import SimpleVoiceAgent
+        voice_agent = SimpleVoiceAgent(openai_client)
+        
+        # Generate speech using the voice agent
+        audio_content = await voice_agent.generate_audio(text, voice)
+        
+        if not audio_content:
+            raise HTTPException(status_code=500, detail="Failed to generate audio content")
+        
+        # Convert to streaming response
+        audio_bytes = BytesIO(audio_content)
+        
+        return StreamingResponse(
+            audio_bytes,
+            media_type="audio/mpeg",
+            headers={"Content-Disposition": "attachment; filename=custom_narration.mp3"}
+        )
+        
+    except Exception as e:
+        raise HTTPException(status_code=500, detail=f"Voice generation failed: {str(e)}")
+
+@app.get("/api/voice/status")
+async def get_voice_agent_status():
+    """Get current voice agent and slides status"""
+    try:
+        from voice_agent import SimpleVoiceAgent
+        voice_agent = SimpleVoiceAgent(openai_client)
+        
+        # Get comprehensive status
+        slides_info = voice_agent.get_slides_info()
+        
+        return {
+            "voice_agent_available": True,
+            "openai_client_available": openai_client is not None,
+            "total_slides": slides_info["total_slides"],
+            "current_slide": slides_info["current_slide"],
+            "document_title": slides_info["document_title"],
+            "slides_available": slides_info["slides_available"],
+            "slides_list": slides_info["slides"],
+            "voice_options": ["alloy", "echo", "fable", "onyx", "nova", "shimmer"],
+            "ready_for_narration": slides_info["slides_available"] and openai_client is not None,
+            "audio_cache_size": len(slide_audio_cache),
+            "cached_slides": list(slide_audio_cache.keys())
+        }
+        
+    except Exception as e:
+        return {
+            "voice_agent_available": False,
+            "error": str(e),
+            "total_slides": 0,
+            "slides_available": False,
+            "ready_for_narration": False,
+            "audio_cache_size": 0
+        }
+
+@app.post("/api/voice/clear-cache")
+async def clear_voice_cache():
+    """Clear all cached slides and audio data"""
+    try:
+        clear_slide_cache()
+        return {
+            "success": True,
+            "message": "Successfully cleared slide and audio cache"
+        }
+    except Exception as e:
+        return {
+            "success": False,
+            "error": str(e)
+        }
 
 if __name__ == "__main__":
     uvicorn.run(app, host="0.0.0.0", port=8000) 

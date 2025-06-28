@@ -15,6 +15,7 @@ export default function Home() {
   const [error, setError] = useState<string | null>(null);
   const [summaryRefreshing, setSummaryRefreshing] = useState(false);
   const [slideGenerating, setSlideGenerating] = useState(false);
+  const [isNarrating, setIsNarrating] = useState(false);
   
   // Ref to access DocumentSummary refresh function
   const documentSummaryRef = useRef<DocumentSummaryRef>(null);
@@ -103,6 +104,46 @@ export default function Home() {
       console.error("Error loading slide:", err);
       // If slide doesn't exist, stay on current slide
     }
+  };
+
+  const playSlideNarration = async (slideNumber: number) => {
+    setIsNarrating(true);
+    try {
+      const response = await fetch(`/api/slides/${slideNumber}`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action: 'generate_voice' })
+      });
+      
+      const data = await response.json();
+      
+      if (data.narration_text) {
+        // For now, just speak the text using browser's speech synthesis
+        // When backend is connected, this will play the actual audio file
+        if ('speechSynthesis' in window) {
+          const utterance = new SpeechSynthesisUtterance(data.narration_text);
+          utterance.rate = 0.9;
+          utterance.pitch = 1.0;
+          utterance.volume = 0.8;
+          utterance.onend = () => setIsNarrating(false);
+          utterance.onerror = () => setIsNarrating(false);
+          speechSynthesis.speak(utterance);
+        } else {
+          console.log('Narration text:', data.narration_text);
+          setIsNarrating(false);
+        }
+      }
+    } catch (error) {
+      console.error('Failed to generate narration:', error);
+      setIsNarrating(false);
+    }
+  };
+
+  const stopNarration = () => {
+    if ('speechSynthesis' in window) {
+      speechSynthesis.cancel();
+    }
+    setIsNarrating(false);
   };
 
   if (loading) {
@@ -277,19 +318,100 @@ export default function Home() {
             </div>
           </div>
 
-          {/* Video Section - Takes 1/3 of space on large screens */}
+          {/* Live Stream Section - Takes 1/3 of space on large screens */}
           <div className="lg:col-span-1">
             <h2 className="text-2xl font-semibold text-gray-800 mb-4 flex items-center">
-              <span className="mr-2">🎥</span>
-              Live Video Stream
+              <span className="mr-2">🎙️</span>
+              Live Audio Stream
             </h2>
-            <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-6 min-h-[400px] flex items-center justify-center">
-              <div className="text-center">
-                <div className="w-16 h-16 bg-red-500 rounded-full mx-auto mb-4 flex items-center justify-center">
-                  <span className="text-white text-2xl">🔴</span>
+            <div className="bg-amber-50 border-2 border-gray-300 rounded-lg p-6 min-h-[400px]">
+              <div className="space-y-6">
+                {/* Live Status */}
+                <div className="text-center">
+                  <div className={`w-16 h-16 rounded-full mx-auto mb-4 flex items-center justify-center transition-all ${
+                    isNarrating ? 'bg-red-500 animate-pulse' : 'bg-gray-400'
+                  }`}>
+                    <span className="text-white text-2xl">
+                      {isNarrating ? '🎙️' : '⏸️'}
+                    </span>
+                  </div>
+                  <p className={`font-medium ${isNarrating ? 'text-red-600' : 'text-gray-600'}`}>
+                    {isNarrating ? 'LIVE - Narrating Slide' : 'Audio Stream Ready'}
+                  </p>
                 </div>
-                <p className="text-gray-600">Live speaker video stream</p>
-                <p className="text-sm text-gray-500 mt-2">Coming soon...</p>
+
+                {/* Current Slide Info */}
+                {currentSlide && (
+                  <div className="bg-white rounded-lg p-4 border">
+                    <h4 className="font-semibold text-gray-800 mb-2">Now Playing:</h4>
+                    <p className="text-sm text-gray-600 mb-1">Slide {currentSlideNumber}: {currentSlide.title}</p>
+                    <p className="text-xs text-gray-500 line-clamp-2">{currentSlide.content}</p>
+                  </div>
+                )}
+
+                {/* Voice Controls */}
+                <div className="space-y-3">
+                  <button
+                    onClick={() => isNarrating ? stopNarration() : playSlideNarration(currentSlideNumber)}
+                    disabled={!currentSlide}
+                    className={`w-full py-3 px-4 rounded-lg font-medium transition-all ${
+                      isNarrating 
+                        ? 'bg-red-500 text-white hover:bg-red-600' 
+                        : 'bg-blue-500 text-white hover:bg-blue-600 disabled:bg-gray-300 disabled:cursor-not-allowed'
+                    }`}
+                  >
+                    {isNarrating ? (
+                      <>
+                        <svg className="w-5 h-5 inline mr-2" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M18 10a8 8 0 11-16 0 8 8 0 0116 0zM7 8a1 1 0 012 0v4a1 1 0 11-2 0V8zm5-1a1 1 0 00-1 1v4a1 1 0 102 0V8a1 1 0 00-1-1z" clipRule="evenodd" />
+                        </svg>
+                        Stop Narration
+                      </>
+                    ) : (
+                      <>
+                        <svg className="w-5 h-5 inline mr-2" fill="currentColor" viewBox="0 0 20 20">
+                          <path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zM9.555 7.168A1 1 0 008 8v4a1 1 0 001.555.832l3-2a1 1 0 000-1.664l-3-2z" clipRule="evenodd" />
+                        </svg>
+                        Start Narration
+                      </>
+                    )}
+                  </button>
+
+                  {/* Quick Actions */}
+                  <div className="grid grid-cols-2 gap-2">
+                    <button
+                      onClick={async () => {
+                        if (currentSlideNumber > 1) {
+                          await changeSlide(currentSlideNumber - 1);
+                          setTimeout(() => playSlideNarration(currentSlideNumber - 1), 100);
+                        }
+                      }}
+                      disabled={currentSlideNumber <= 1 || totalSlides === 0 || isNarrating}
+                      className="px-3 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    >
+                      ← Prev & Play
+                    </button>
+                    <button
+                      onClick={async () => {
+                        if (currentSlideNumber < totalSlides) {
+                          await changeSlide(currentSlideNumber + 1);
+                          setTimeout(() => playSlideNarration(currentSlideNumber + 1), 100);
+                        }
+                      }}
+                      disabled={currentSlideNumber >= totalSlides || totalSlides === 0 || isNarrating}
+                      className="px-3 py-2 bg-gray-200 text-gray-700 rounded hover:bg-gray-300 disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+                    >
+                      Next & Play →
+                    </button>
+                  </div>
+                </div>
+
+                {/* Audio Status */}
+                <div className="text-center pt-4 border-t">
+                  <p className="text-xs text-gray-500">
+                    {isNarrating ? 'Audio streaming...' : 'Ready to stream audio'}
+                  </p>
+                </div>
               </div>
             </div>
           </div>

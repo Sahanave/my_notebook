@@ -11,5 +11,12 @@ openai==1.3.0
 tqdm==4.66.1
 pandas==2.1.4
 python-dotenv==1.0.0
-livekit-agents[deepgram,openai,cartesia,silero,turn-detector]~=1.0
+livekit-agents
 livekit-plugins-noise-cancellation~=0.2
+
+# Avatar & Advanced Voice Features (optional)
+livekit-plugins-openai
+livekit-plugins-deepgram
+livekit-plugins-cartesia
+livekit-plugins-silero
+livekit-plugins-bey

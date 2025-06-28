@@ -13,22 +13,6 @@ from tqdm import tqdm
 from data_models import SlideContent, LiveUpdate, DocumentSummary, UploadResult
 
 
-def generate_questions(client, summary: DocumentSummary):
-    text = extract_text_from_pdf(pdf_path)
-
-    prompt = (
-        "Can you generate a question that can only be answered from this document?:\n"
-        f"{text}\n\n"
-    )
-
-    response = client.responses.create(
-        input=prompt,
-        model="gpt-4o",
-    )
-
-    question = response.output[0].content[0].text
-
-    return question
 
 def upload_single_pdf(client, file_path: str, vector_store_id: str):
     file_name = os.path.basename(file_path)
@@ -191,55 +175,80 @@ def generate_questions_from_summary(client, summary: DocumentSummary) -> List[st
         ]
 
 def get_answer_using_file_search(client, question: str, vector_store_id: str, max_results: int = 5) -> str:
-    """Get answer to a question using file search via Responses API"""
+    """Get answer to a question using file search via Assistants API"""
     
     try:
-        response = client.responses.create(
-            input=question,
+        # Create a temporary assistant with file search capability
+        assistant = client.beta.assistants.create(
+            name="Document Q&A Assistant",
+            instructions="You are a helpful assistant that answers questions based on the provided documents. Provide clear, accurate answers based on the document content.",
             model="gpt-4o-mini",
-            tools=[{
-                "type": "file_search",
-                "vector_store_ids": [vector_store_id],
-                "max_num_results": max_results,
-            }],
-            tool_choice="required"  # Force file_search usage
+            tools=[{"type": "file_search"}],
+            tool_resources={
+                "file_search": {
+                    "vector_store_ids": [vector_store_id]
+                }
+            }
         )
         
-        print(f"🔍 Response structure: {type(response)}")
-        print(f"🔍 Response attributes: {dir(response)}")
+        # Create a thread
+        thread = client.beta.threads.create()
         
-        # Try different ways to access the response content
-        if hasattr(response, 'output') and response.output and len(response.output) > 0:
-            output = response.output[0]
-            print(f"🔍 Output type: {type(output)}")
-            print(f"🔍 Output attributes: {dir(output)}")
+        # Add the question as a message
+        client.beta.threads.messages.create(
+            thread_id=thread.id,
+            role="user",
+            content=question
+        )
+        
+        # Run the assistant
+        run = client.beta.threads.runs.create(
+            thread_id=thread.id,
+            assistant_id=assistant.id
+        )
+        
+        # Wait for completion
+        import time
+        while run.status in ['queued', 'in_progress']:
+            time.sleep(1)
+            run = client.beta.threads.runs.retrieve(
+                thread_id=thread.id,
+                run_id=run.id
+            )
+        
+        if run.status == 'completed':
+            # Get the assistant's response
+            messages = client.beta.threads.messages.list(
+                thread_id=thread.id,
+                order="desc",
+                limit=1
+            )
             
-            # Try accessing content in different ways
-            if hasattr(output, 'content') and output.content and len(output.content) > 0:
-                content = output.content[0]
-                if hasattr(content, 'text'):
-                    return content.text
-                elif hasattr(content, 'content'):
-                    return str(content.content)
-                else:
-                    return str(content)
-            elif hasattr(output, 'text'):
-                return output.text
-            elif hasattr(output, 'message'):
-                if hasattr(output.message, 'content'):
-                    return output.message.content
-                else:
-                    return str(output.message)
-            else:
-                return str(output)
+            if messages.data:
+                message = messages.data[0]
+                if message.content and len(message.content) > 0:
+                    content = message.content[0]
+                    if hasattr(content, 'text') and hasattr(content.text, 'value'):
+                        answer = content.text.value
+                        
+                        # Clean up - delete the assistant and thread
+                        try:
+                            client.beta.assistants.delete(assistant.id)
+                        except:
+                            pass  # Ignore cleanup errors
+                        
+                        return answer
         
-        # If we can't parse the response, return a default message
-        print(f"🔍 Full response: {response}")
-        return "I found information related to your question in the document, but couldn't extract the specific details."
+        # Clean up on failure
+        try:
+            client.beta.assistants.delete(assistant.id)
+        except:
+            pass
+        
+        return f"I found information related to your question in the document, but couldn't extract specific details. The assistant run status was: {run.status}"
     
     except Exception as e:
         print(f"Error getting answer for question '{question}': {e}")
-        print(f"🔍 Error type: {type(e)}")
         return "Unable to retrieve answer due to an error."
 
 def generate_qa_pairs_from_document(client, summary: DocumentSummary, vector_store_id: str) -> List[dict]:
@@ -281,6 +290,7 @@ def generate_qa_pairs_from_document(client, summary: DocumentSummary, vector_sto
     
     return qa_pairs
 
+
 def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary: DocumentSummary) -> List[SlideContent]:
     """Generate slides from Q&A pairs to create an educational presentation"""
     
@@ -289,13 +299,10 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
         return []
     
     # Prepare Q&A content for slide generation
-    qa_content = ""
-    for qa in qa_pairs:
-        qa_content += f"Q: {qa['question']}\nA: {qa['answer']}\n\n"
+    qa_content = "\n\n".join([f"Q: {qa['question']}\nA: {qa['answer']}" for qa in qa_pairs])
     
-   
     prompt = f"""
-    Create a simple, practical presentation from this Q&A content. Focus on making slides that are easy to present and understand.
+    Create an engaging and practical presentation from this Q&A content. Focus on making slides that are easy to present and understand.
 
     **Document Context:**
     Title: {document_summary.title}
@@ -309,111 +316,88 @@ def generate_slides_from_qa_pairs(client, qa_pairs: List[dict], document_summary
     Create 4-6 slides from this content. For each slide, provide:
 
     1. **Title**: Clear, descriptive slide title
-    2. **Content**: Main bullet points or key information for the slide (3-5 bullet points max)
-    3. **Image Description**: Describe what visual/image would help explain this slide (e.g., "diagram showing transformer architecture", "chart comparing model performance", "simple flowchart of the process")
+    2. **Content**: Main  key information for the slide (3-5 points max)  
+    3. **Image Description**: Describe what visual/image would help explain this slide
     4. **Speaker Notes**: What the presenter should say when presenting this slide (2-3 sentences)
 
-    Keep it simple and practical - focus on the key insights from the Q&A that would help someone understand the main concepts of this document.
-
-    Example format:
-    Title: "Understanding the Core Concept"
-    Content: "• Main point 1 • Main point 2 • Main point 3"
-    Image Description: "Diagram showing the relationship between components"
-    Speaker Notes: "This slide introduces the fundamental concept. The key insight here is how these components work together."
+    Keep it simple and practical - focus on the key insights from the Q&A that would help someone understand the main concepts.
     """
 
-    try:
-        slides_schema = {
-            "name": "generate_slides_from_qa",
-            "description": "Generate educational slides from Q&A pairs",
-            "parameters": {
-                "type": "object",
-                "properties": {
-                    "slides": {
-                        "type": "array",
-                        "items": {
-                            "type": "object",
-                            "properties": {
-                                "title": {"type": "string"},
-                                "content": {"type": "string"},
-                                "image_description": {"type": "string"},
-                                "speaker_notes": {"type": "string"},
-                                "slide_number": {"type": "integer"}
-                            },
-                            "required": ["title", "content", "image_description", "speaker_notes", "slide_number"]
-                        }
+    slides_schema = {
+        "name": "generate_slides_from_qa",
+        "description": "Generate educational slides from Q&A pairs",
+        "parameters": {
+            "type": "object",
+            "properties": {
+                "slides": {
+                    "type": "array",
+                    "items": {
+                        "type": "object",
+                        "properties": {
+                            "title": {"type": "string"},
+                            "content": {"type": "string"},
+                            "image_description": {"type": "string"},
+                            "speaker_notes": {"type": "string"},
+                            "slide_number": {"type": "integer"}
+                        },
+                        "required": ["title", "content", "image_description", "speaker_notes", "slide_number"]
                     }
-                },
-                "required": ["slides"]
-            }
+                }
+            },
+            "required": ["slides"]
         }
+    }
 
+    try:
         response = client.chat.completions.create(
             model="gpt-4",
             messages=[
-                {"role": "system", "content": "You are an expert educator who creates clear, engaging slides from Q&A content. Make slides informative and educational with well-structured bullet points."},
+                {"role": "system", "content": "You are an expert educator who creates clear, engaging slides from Q&A content. Generate valid JSON with proper escaping."},
                 {"role": "user", "content": prompt}
             ],
             tools=[{"type": "function", "function": slides_schema}],
             tool_choice={"type": "function", "function": {"name": "generate_slides_from_qa"}}
         )
 
-        if response.choices and response.choices[0].message.tool_calls:
-            tool_call = response.choices[0].message.tool_calls[0]
-            
-            # Clean the JSON arguments to handle control characters
-            raw_json = tool_call.function.arguments
-            print(f"🔍 Raw JSON length: {len(raw_json)}")
-            
-            # Replace common control characters that break JSON parsing
-            import re
-            cleaned_json = raw_json.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-            
-            # Remove any other control characters (ASCII 0-31 except \n, \r, \t)
-            cleaned_json = re.sub(r'[\x00-\x08\x0B\x0C\x0E-\x1F]', '', cleaned_json)
-            
-            try:
-                structured_json = json.loads(cleaned_json)
-            except json.JSONDecodeError as json_error:
-                print(f"🔍 JSON decode error: {json_error}")
-                print(f"🔍 Problematic JSON snippet: {cleaned_json[max(0, json_error.pos-50):json_error.pos+50]}")
-                # Try with a more aggressive cleaning approach
-                import unicodedata
-                cleaned_json = ''.join(ch for ch in raw_json if unicodedata.category(ch)[0] != 'C' or ch in '\n\r\t')
-                cleaned_json = cleaned_json.replace('\n', '\\n').replace('\r', '\\r').replace('\t', '\\t')
-                structured_json = json.loads(cleaned_json)
-            
-            slides = []
-            for slide_data in structured_json["slides"]:
-                # Clean the content for any remaining control characters
-                clean_title = slide_data["title"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
-                clean_content = slide_data["content"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
-                clean_image_desc = slide_data["image_description"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
-                clean_speaker_notes = slide_data["speaker_notes"].replace('\n', ' ').replace('\r', ' ').replace('\t', ' ')
-                
-                slide = SlideContent(
-                    title=clean_title,
-                    content=clean_content,
-                    image_description=clean_image_desc,
-                    speaker_notes=clean_speaker_notes,
-                    slide_number=slide_data["slide_number"]
-                )
-                slides.append(slide)
-            
-            return slides
-        else:
-            raise Exception("No structured response from OpenAI")
-    
-    except Exception as e:
-        print(f"Error generating slides from Q&A: {e}")
-        # Return fallback slides
-        return [
-            SlideContent(
-                title=document_summary.title,
-                content=f"Educational presentation based on Q&A analysis of {document_summary.document_type}",
-                image_description="Title slide with document cover or main concept visualization",
-                speaker_notes=f"Welcome to this presentation about {document_summary.title}. Today we'll explore the key concepts from this {document_summary.document_type}.",
-                slide_number=1
+        if not (response.choices and response.choices[0].message.tool_calls):
+            raise Exception("No tool calls found in response")
+        
+        # Simple JSON parsing - let Python handle the escaping
+        tool_call = response.choices[0].message.tool_calls[0]
+        slides_data = json.loads(tool_call.function.arguments)
+        
+        # Convert to SlideContent objects
+        slides = []
+        for i, slide_data in enumerate(slides_data["slides"], 1):
+            slide = SlideContent(
+                title=slide_data.get("title", f"Slide {i}"),
+                content=slide_data.get("content", ""),
+                image_description=slide_data.get("image_description", ""),
+                speaker_notes=slide_data.get("speaker_notes", ""),
+                slide_number=slide_data.get("slide_number", i)
             )
-        ]
+            slides.append(slide)
+        
+        print(f"✅ Successfully generated {len(slides)} slides")
+        return slides
+        
+    except json.JSONDecodeError as e:
+        print(f"❌ JSON parsing error: {e}")
+        print(f"🔍 Raw response: {tool_call.function.arguments[:500]}...")
+        return create_fallback_slides(document_summary)
+        
+    except Exception as e:
+        print(f"❌ Error generating slides: {e}")
+        return create_fallback_slides(document_summary)
 
+def create_fallback_slides(document_summary: DocumentSummary) -> List[SlideContent]:
+    """Create simple fallback slides when generation fails"""
+    return [
+        SlideContent(
+            title=document_summary.title,
+            content=f"Educational presentation based on analysis of {document_summary.document_type}. Main topics include: {', '.join(document_summary.main_topics[:3])}.",
+            image_description="Title slide with document cover or main concept visualization",
+            speaker_notes=f"Welcome to this presentation about {document_summary.title}. Today we'll explore the key concepts from this {document_summary.document_type}.",
+            slide_number=1
+        )
+    ]
